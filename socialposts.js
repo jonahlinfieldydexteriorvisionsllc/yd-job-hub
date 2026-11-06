@@ -58,6 +58,9 @@
   };
   const NEEDS = ['held', 'ready', 'failed'];
   const SHARE_SOURCE = 'YD Exterior Visions';
+  // How many photos a post takes (functions/social.py PHOTOS, keep the same).
+  const PHOTO_MOST = { facebook: 4, instagram: 4, google: 1, nextdoor: 4 };
+  const STAGE_WORDS = { after: 'After', before: 'Before', during: 'During' };
 
   let cfg = null;          // settings/social as read
   let hook = null;         // /social/status: the hookups
@@ -68,6 +71,8 @@
   let open = null;         // the post opened for changing
   let busy = '';           // what the server is doing for us
   const drafts = {};       // post id -> words typed and not saved yet (kept through redraws)
+  const choosing = {};     // post id -> showing the job's photos to choose from
+  const jobShots = {};     // job id -> its photos, read when he asks to choose
   let own = null;          // "a post of your own" form, while open
   let fbForm = { appId: '', appSecret: '' };
 
@@ -278,6 +283,9 @@
   const whatOf = p => p.kind === 'job' ? (p.jobName || 'A finished job') + (p.town ? ' · ' + p.town : '')
     : p.kind === 'idea' ? (/^yt-/.test(p.ideaId || '') ? '📝 ' : '🍂 ') + (p.topic || 'Seasonal post') : '✍️ Your post';
   const photosOf = p => (p.photos || []).filter(x => /^https:\/\//.test((x || {}).url || ''));
+  // The word on a photo that isn't of the finished job. After needs none.
+  const stageTag = x => (x.stage === 'before' || x.stage === 'during')
+    ? '<span class="sp-photo-tag">' + STAGE_WORDS[x.stage] + '</span>' : '';
 
   function rowHtml(p) {
     const st = STATUS[p.status] || [p.status, ''];
@@ -299,6 +307,38 @@
         ? '<div class="sp-why">' + esc(p.error) + '</div>' : '') +
       (isOpen ? openHtml(p, photos) : '') +
     '</div>';
+  }
+
+  // Every photo on the post's job, to swap in by hand: the code picks by how
+  // alike photos are and when they were taken, so the last word is his.
+  function chooserHtml(p) {
+    const id = safeId(p.id);
+    if (!choosing[id]) {
+      return '<div class="field-actions"><button class="btn btn-sm" onclick="spChoose(\'' + id + '\')">🖼️ Choose from all this job’s photos</button></div>';
+    }
+    const close = '<div class="field-actions"><button class="btn btn-sm" onclick="spChoose(\'' + id + '\')">Done choosing</button></div>';
+    const leftWhy = (post, pid) => ((post.photosLeftOut || []).find(l => l.id === pid) || {}).why;
+    const rows = jobShots[p.jobId];
+    if (!rows) return '<p class="hint">Reading this job’s photos…</p>' + close;
+    if (!rows.length) return '<p class="hint">This job has no photos to choose from.</p>' + close;
+    const most = PHOTO_MOST[p.place] || 4;
+    const on = (p.photos || []).map(x => x.id);
+    const shot = x => {
+      const at = on.indexOf(x.id);
+      return '<button class="sp-pick' + (at !== -1 ? ' on' : '') + '" aria-pressed="' + (at !== -1) + '" ' +
+        'onclick="spPick(\'' + id + '\', \'' + safeId(x.id) + '\')" aria-label="' + (at !== -1 ? 'Take this photo off the post' : 'Put this photo on the post') + '">' +
+        '<img src="' + esc(x.thumb) + '" alt="" loading="lazy">' +
+        (at !== -1 ? '<span class="sp-pick-n">' + (at + 1) + '</span>' : '') +
+        (leftWhy(p, x.id) ? '<span class="sp-pick-warn" aria-label="Claude left this one out">⚠️</span>' : '') + '</button>';
+    };
+    return '<div class="sp-chooser"><p class="hint">' +
+        (most === 1 ? 'This post takes 1 photo: tap one to swap it in.'
+          : 'Tap a photo to put it on the post or take it off. It takes up to ' + most + '; once it’s full, a new one replaces the last. ' +
+            'The numbers are the order they show in, and ★ on the photos above makes one first. ⚠️ means Claude left it out.') + '</p>' +
+      ['after', 'before', 'during'].map(s => {
+        const list = rows.filter(x => x.stage === s);
+        return list.length ? '<div class="sp-chooser-head">' + STAGE_WORDS[s] + '</div><div class="sp-photos">' + list.map(shot).join('') + '</div>' : '';
+      }).join('') + close + '</div>';
   }
 
   function shareUrl(p) {
@@ -348,12 +388,16 @@
         : '<div class="sp-text">' + esc(p.text || '') + '</div>') +
       (photos.length ? '<div class="sp-photos">' + photos.map((x, i) => '<span class="sp-photo">' +
           '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.thumb || x.url) + '" alt="Photo ' + (i + 1) + '" loading="lazy"></a>' +
+          stageTag(x) +
           // Its place in p.photos, not in this https-only list.
-          (live && p.status !== 'ready' && photos.length > 0 ? '<button class="sp-photo-x" onclick="spDropPhoto(\'' + id + '\', ' +
+          (live && photos.length > 0 ? '<button class="sp-photo-x" onclick="spDropPhoto(\'' + id + '\', ' +
             (p.photos || []).indexOf(x) + ')" aria-label="Leave this photo out">✕</button>' : '') +
+          (live && i > 0 ? '<button class="sp-photo-first" onclick="spFirstPhoto(\'' + id + '\', ' +
+            (p.photos || []).indexOf(x) + ')" aria-label="Make this the first photo">★</button>' : '') +
         '</span>').join('') + '</div>' +
         (p.place === 'nextdoor' && p.status === 'ready' ? '<p class="hint">Tap a photo to open it, save it, then add it in Nextdoor.</p>' : '')
         : '') +
+      (live && p.kind === 'job' && p.jobId ? chooserHtml(p) : '') +
       (live && p.status !== 'ready' && p.status !== 'posting'
         ? '<label class="sp-lbl">When<input type="datetime-local" id="spAt_' + id + '" value="' + esc(local) + '" ' +
             'onchange="spMove(\'' + id + '\', this.value)"></label>' : '') +
@@ -555,8 +599,62 @@
     const p = posts[id];
     if (!p) return;
     const was = (p.photos || []).slice();
+    if (lastPhotoStays(p, was.length)) return;
     patchPost(id, { photos: was.filter((_, k) => k !== i), edited: true }, 'the photos');
     if (window.showUndo) showUndo('Photo left out', () => patchPost(id, { photos: was }, 'the photos'));
+  };
+  // Instagram can't take a post with no photo.
+  function lastPhotoStays(p, count) {
+    if (p.place !== 'instagram' || count > 1) return false;
+    showToast('Instagram needs a photo — tap another one on first');
+    return true;
+  }
+  window.spFirstPhoto = (id, i) => {
+    const p = posts[id];
+    if (!p || !(p.photos || [])[i]) return;
+    const was = p.photos.slice();
+    patchPost(id, { photos: [was[i]].concat(was.filter((_, k) => k !== i)), edited: true }, 'the photos');
+    if (window.showUndo) showUndo('Moved to first', () => patchPost(id, { photos: was }, 'the photos'));
+  };
+  window.spChoose = async id => {
+    const p = posts[id];
+    if (!p) return;
+    choosing[id] = !choosing[id];
+    // Read afresh each time: a photo may have been added to the job since.
+    delete jobShots[p.jobId];
+    draw();
+    if (!choosing[id]) return;
+    let got = null;
+    try { got = await window.YDDb.listWhere('jobPhotos', 'jobId', '==', p.jobId); }
+    catch (e) { console.warn('[posts] job photos not read:', e && (e.code || e.message)); }
+    if (!got) { choosing[id] = false; showToast('Couldn’t read this job’s photos — try again'); draw(); return; }
+    jobShots[p.jobId] = Object.entries(got)
+      .filter(([, x]) => !x.deleteAsked && /^https:\/\//.test(x.url || '') && STAGE_WORDS[x.stage])
+      .map(([pid, x]) => ({ id: pid, url: x.url, thumb: x.thumbUrl || x.url, stage: x.stage, at: x.at || '' }))
+      .sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
+    draw();
+  };
+  window.spPick = (id, pid) => {
+    const p = posts[id];
+    const row = p && (jobShots[p.jobId] || []).find(x => safeId(x.id) === pid);
+    if (!row) return;
+    const was = (p.photos || []).slice();
+    const most = PHOTO_MOST[p.place] || 4;
+    const one = { id: row.id, url: row.url, thumb: row.thumb, stage: row.stage };
+    const isOn = was.some(x => x.id === row.id);
+    if (isOn && lastPhotoStays(p, was.length)) return;
+    const full = !isOn && was.length >= most;
+    patchPost(id, { photos: isOn ? was.filter(x => x.id !== row.id) : was.slice(0, full ? most - 1 : most).concat(one), edited: true }, 'the photos');
+    const why = !isOn && ((p.photosLeftOut || []).find(l => l.id === row.id) || {}).why;
+    if (window.showUndo && (full || why)) showUndo(why ? 'Claude left this one out: ' + why : 'Swapped in for the last photo', () => patchPost(id, { photos: was }, 'the photos'));
+  };
+  // From the Nextdoor card on Home: the same post, open in the Posts window.
+  window.spHomeChange = id => {
+    window.openPosts();
+    view = 'coming';
+    open = id;
+    choosing[id] = false;
+    window.spChoose(id);
   };
   window.spMove = (id, v) => {
     const t = new Date(v);
@@ -618,8 +716,9 @@
       '<div class="sp-text' + (clip ? ' sp-home-clip' : '') + '">' + esc(text) + '</div>' +
       (long ? '<button class="sp-home-more" onclick="spHomeWords(\'' + id + '\')">' + (clip ? 'Show all the words' : 'Show less') + '</button>' : '') +
       (photos.length ? '<div class="sp-photos">' + photos.map((x, i) => '<span class="sp-photo">' +
-          '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.thumb || x.url) + '" alt="Photo ' + (i + 1) + '"></a></span>').join('') + '</div>' +
+          '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.thumb || x.url) + '" alt="Photo ' + (i + 1) + '"></a>' + stageTag(x) + '</span>').join('') + '</div>' +
         '<p class="hint">Tap a photo to open it, save it, then add it in Nextdoor.</p>' : '') +
+      (p.kind === 'job' && p.jobId ? '<button class="sp-home-more" onclick="spHomeChange(\'' + id + '\')">Change the photos</button>' : '') +
       '<div class="sp-acts sp-home-acts">' +
         (been ? tick(true) + openIt('Open Nextdoor again') : openIt('🏘️ Open Nextdoor with the words in', true) + tick()) +
         '<button class="btn" onclick="spCopy(\'' + id + '\')">📋 Copy words</button>' +

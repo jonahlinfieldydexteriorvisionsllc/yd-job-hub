@@ -39,8 +39,10 @@ call, and it only ever takes a post with a photo (the place is photos).
 
 The words for a job are Claude's (posts.words -> socialWords/{jobId}),
 written once per job -- when it is marked Complete, or here the first time
-it is picked. Everything else is plain code: which slot, which job, the
-photos, the checks, the posting.
+it is picked. A job's photos are picked by plain code and looked at once by
+Claude (photopick.py, kept in socialPicks/{jobId}), because code can't see a
+hand in a corner. Everything else is plain code: which slot, which job, the
+checks, the posting.
 
 plan() runs after the morning and evening summaries (main.py /digest/run)
 and on "Plan them now": it fills the next HORIZON_DAYS days. publish_due()
@@ -81,6 +83,7 @@ notConnected (the place is not hooked up -- nothing to push about);
 missed (its time passed by more than LATE); skipped (his).
 """
 
+import concurrent.futures
 import datetime
 import email.utils
 import io
@@ -99,6 +102,7 @@ from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 
 import digest as dg
+import photopick
 
 MODEL = "claude-sonnet-5-5"
 
@@ -135,6 +139,7 @@ WRITES_PER_RUN = 6                        # Claude writes for this many jobs a r
 PLAN_BUDGET_S = 150                       # ... and is not asked again after this many seconds
 IDEAS_PER_MONTH = 10
 PHOTOS = {"facebook": 4, "instagram": 4, "google": 1, "nextdoor": 4}
+LOOKS_PER_RUN = 6                         # jobs' photos Claude looks at in one plan() at most
 GALLERY_A_WEEK = 5                        # After photos added to the Google profile each week
 LIMITS = {"facebook": 5000, "instagram": 2200, "google": 1500, "nextdoor": 3400}
 
@@ -337,6 +342,109 @@ def after_photos(db):
     for v in out.values():
         v.sort(key=lambda x: x["at"], reverse=True)
     return out
+
+
+def _job_rows(db, jid):
+    """Every photo on a job that a post may use, with its stage."""
+    rows = []
+    for s in db.collection("jobPhotos").where("jobId", "==", jid).stream():
+        p = s.to_dict() or {}
+        url, stage = str(p.get("url") or ""), str(p.get("stage") or "")
+        if p.get("deleteAsked") or not url.startswith("https://") or stage not in photopick.STAGES:
+            continue
+        rows.append({"id": s.id, "url": url, "thumb": str(p.get("thumbUrl") or url), "stage": stage,
+                     "at": str(p.get("at") or "")})
+    return rows
+
+
+def _fetch(url):
+    """A photo's bytes, None when it can't be read."""
+    try:
+        r = requests.get(url, timeout=15)
+        return r.content if r.status_code < 300 else None
+    except requests.RequestException as e:
+        print("social: photo not read:", e)
+        return None
+
+
+def _shot(row):
+    """(row, a JPEG big enough to read a corner), None when it can't be read."""
+    from PIL import Image, ImageOps
+    raw = _fetch(row["url"])
+    if not raw:
+        return None
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            im.thumbnail((photopick.LOOK_PX, photopick.LOOK_PX))
+            out = io.BytesIO()
+            im.save(out, "JPEG", quality=80)
+        return row, out.getvalue()
+    except Exception as e:              # noqa: BLE001 -- anything can be in a bad file
+        print("social: photo not read:", row.get("id"), e)
+        return None
+
+
+def _side_by_side(fn, items):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        return list(pool.map(fn, items))
+
+
+def job_picks(db, jid, client=None):
+    """The photos a job's posts use, in order. Returns {photos: rows, looked,
+    held, left, asked, failed, usage}. Kept in socialPicks/{jobId}, so Facebook,
+    Instagram and Nextdoor show one set, Claude looks once per job, and a
+    photo added to the job means it is picked again. `client`: Claude may
+    look now; without it the plain order stands and a later run looks. When
+    Claude says no to every photo, photos is empty and `held` says why, so a
+    post can't carry one of them up."""
+    rows = _job_rows(db, jid)
+    key = photopick.key_of(rows)
+    ref = db.collection("socialPicks").document(jid)
+    snap = ref.get()
+    kept = (snap.to_dict() or {}) if snap.exists else {}
+    same = kept.get("key") == key
+    tries = int(kept.get("tries") or 0) if same else 0
+    if tries >= photopick.LOOK_TRIES:
+        client = None
+    out = {"photos": [], "looked": False, "held": "", "left": [], "asked": False, "failed": False, "usage": None}
+    if same and (kept.get("looked") or client is None):
+        by_id = {p["id"]: p for p in rows}
+        return dict(out, photos=[by_id[i] for i in kept.get("photos") or [] if i in by_id],
+                    looked=bool(kept.get("looked")), held=str(kept.get("held") or ""), left=kept.get("leftOut") or [])
+    read = photopick.thin(rows)
+    for p, raw in zip(read, _side_by_side(lambda x: _fetch(x["thumb"]), read)):
+        p["sig"] = photopick.signature(raw) if raw else None
+    plain = photopick.order(read)
+    most = max(PHOTOS.values())
+    out["photos"] = plain[:most]
+    if client is not None and plain:
+        shots = [x for x in _side_by_side(_shot, photopick.for_look(plain)) if x]
+        if shots:
+            out["asked"] = True
+            try:
+                got, out["usage"] = photopick.look(client, MODEL, shots, most)
+            except Exception as e:      # noqa: BLE001 -- Claude down: the plain order stands
+                print("social: photos not looked at for", jid, e)
+                got, out["failed"] = None, True
+            if got is None:
+                tries += 0 if out["failed"] else 1
+            else:
+                # Only photos Claude really saw can go up from here.
+                out["photos"] = photopick.settle([row for row, _ in shots], got, most)
+                out["left"] = got.get("leftOut") or []
+                out["looked"] = True
+                if not out["photos"]:
+                    out["held"] = "Every photo picked has something wrong with it (%s) -- choose the photos by hand" % (
+                        "; ".join(str(x.get("why") or "")[:80] for x in out["left"][:3]) or "no photo was usable")
+    ref.set({"key": key, "photos": [p["id"] for p in out["photos"]], "looked": out["looked"], "held": out["held"],
+             "leftOut": out["left"], "tries": tries, "at": _now().isoformat()})
+    return out
+
+
+def _post_photos(got, place):
+    """A post's own copy of the picks, as many as the place takes."""
+    return [{k: p[k] for k in ("id", "url", "thumb", "stage")} for p in got["photos"][:PHOTOS[place]]]
 
 
 def _jobs(db, photos):
@@ -694,7 +802,8 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
     _make_room(db, talk, times, existing, used_jobs, used_ideas, now)
     words_cache = {}
     ideas_by_month = {}
-    planned, wrote, waiting = [], 0, 0
+    pick_cache = {}
+    planned, wrote, waiting, looks = [], 0, 0, LOOKS_PER_RUN
     stamp = _stamp()
 
     def words_of(jid, j):
@@ -728,6 +837,22 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
 
     def may_ask():
         return wrote < writes and time.monotonic() - t0 < budget_s and not spend.over_cap(db)
+
+    def out_of_time():
+        return time.monotonic() - t0 >= budget_s
+
+    def picks_of(jid):
+        """The job's photos. Past this run's looks or budget the plain order
+        stands, and the post is looked at on a later run (_mend_photos)."""
+        nonlocal looks
+        if jid not in pick_cache:
+            ask = client if looks > 0 and not out_of_time() and not spend.over_cap(db) else None
+            got = job_picks(db, jid, ask)
+            looks = 0 if got["failed"] else looks - 1 if got["asked"] else looks
+            if got["usage"] is not None:
+                spend.record(db, spend.today(), "social", MODEL, got["usage"])
+            pick_cache[jid] = got
+        return pick_cache[jid]
 
     def ideas_of(month):
         """The month's seasonal posts; [] (not kept) when they are not
@@ -773,11 +898,16 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
             words = _words_for(place, w)
             if not words:
                 continue
+            if jid not in pick_cache and out_of_time():
+                later = True            # this run rides on the summaries: the slot waits for the next one
+                break
+            got = picks_of(jid)
+            if not got["photos"] and not got["held"]:
+                continue
             rec = {"kind": "job", "jobId": jid, "jobName": str(j.get("customerName") or "")[:80],
                    "jobNum": str(j.get("estimateNumber") or "")[:20] or None, "town": _town(j),
-                   "finished": day, "words": words,
-                   "photos": [{k: p[k] for k in ("id", "url", "thumb")} for p in photos[jid][:PHOTOS[place]]],
-                   "why": problems(words, j)}
+                   "finished": day, "words": words, "photos": _post_photos(got, place), "photosLooked": got["looked"],
+                   "photosLeftOut": got["left"], "why": "; ".join(x for x in (problems(words, j), got["held"]) if x)}
             used_jobs[place].add(jid)
             break
         if rec is None and not later:
@@ -812,9 +942,52 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
             continue
         existing[pid] = doc
         planned.append(pid)
+    mended = _mend_photos(db, existing, planned, picks_of, out_of_time, now)
     _set(db, {"plannedAt": now.isoformat(), "planWaiting": waiting})
-    print("social: planned", len(planned), "wrote", wrote, "waiting", waiting)
-    return {"planned": len(planned), "wrote": wrote, "waiting": waiting, "ids": planned}
+    print("social: planned", len(planned), "wrote", wrote, "waiting", waiting, "photos mended", mended)
+    return {"planned": len(planned), "wrote": wrote, "waiting": waiting, "ids": planned, "mended": mended}
+
+
+def _mend_photos(db, existing, planned, picks_of, out_of_time, now):
+    """A job's post not up yet whose photos Claude hasn't looked at: planned
+    before this way of picking (Jonah, 6 Nov 2026: four shots of one spot), or
+    when Claude couldn't be asked. It takes the job's picks, unless he changed
+    the post (`edited`) or gave it his OK (`okAt`): those stand."""
+    mended = 0
+    wanted = ("queued", "held", "notConnected", "ready")
+
+    def mine(d):
+        status = d.get("status")
+        return d.get("kind") == "job" and d.get("jobId") and d.get("place") in PLACES and status in wanted and \
+            not d.get("edited") and not d.get("okAt") and not d.get("photosLooked") and \
+            (status == "ready" or (_parse(d.get("at")) or now) > now)
+
+    for pid, d in list(existing.items()):
+        if pid in planned or not mine(d):
+            continue
+        if out_of_time():
+            break
+        got = picks_of(d["jobId"])
+        if not got["photos"] and not got["held"]:
+            continue
+        photos = _post_photos(got, d["place"])
+        # Picking can take a while, and this post may have gone up or been
+        # changed meanwhile: only as it stands now does it take the picks.
+        ref = db.collection("socialPosts").document(pid)
+        snap = ref.get()
+        now_d = (snap.to_dict() or {}) if snap.exists else {}
+        if not mine(now_d):
+            continue
+        if "photosLooked" in now_d and bool(now_d["photosLooked"]) == got["looked"] and \
+                [p.get("id") for p in now_d.get("photos") or []] == [p["id"] for p in photos]:
+            continue
+        patch = {"photos": photos, "photosLooked": got["looked"], "photosLeftOut": got["left"], "updatedAt": _stamp()}
+        if got["held"] and now_d.get("status") in ("queued", "notConnected"):
+            patch.update(status="held", heldWhy=got["held"])
+        ref.set(patch, merge=True)
+        d.update(patch)
+        mended += 1
+    return mended
 
 
 def _hooked(db, cfg):

@@ -6043,6 +6043,20 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .sp-photo img { width:96px; height:96px; object-fit:cover; border-radius:8px; display:block; }
 .sp-photo-x { position:absolute; top:4px; right:4px; width:28px; height:28px; border-radius:50%; border:0;
               background:rgba(0,0,0,.6); color:#fff; font-size:14px; cursor:pointer; }
+/* Which of the job's photos a post shows (socialposts.js chooserHtml). */
+.sp-photo-first { position:absolute; top:4px; left:4px; width:28px; height:28px; border-radius:50%; border:0;
+                  background:rgba(0,0,0,.6); color:#fff; font-size:14px; cursor:pointer; }
+.sp-photo-x::after, .sp-photo-first::after { content:''; position:absolute; inset:-8px; }
+.sp-photo-tag { position:absolute; left:4px; bottom:4px; padding:1px 6px; border-radius:6px; background:rgba(0,0,0,.65);
+                color:#fff; font-size:11px; font-weight:600; pointer-events:none; }
+.sp-chooser { display:flex; flex-direction:column; gap:6px; }
+.sp-chooser-head { font-size:13px; font-weight:600; }
+.sp-pick { position:relative; padding:0; border:3px solid transparent; border-radius:11px; background:none; cursor:pointer; }
+.sp-pick.on { border-color:var(--brand-ink); }
+.sp-pick img { width:88px; height:88px; object-fit:cover; border-radius:8px; display:block; }
+.sp-pick-n { position:absolute; top:3px; right:3px; min-width:24px; height:24px; border-radius:50%; background:var(--brand);
+             color:#fff; font-size:13px; font-weight:700; line-height:24px; text-align:center; }
+.sp-pick-warn { position:absolute; left:3px; bottom:3px; font-size:15px; line-height:1; }
 .sp-acts { display:flex; flex-wrap:wrap; gap:6px; }
 .sp-acts a.btn { text-decoration:none; display:inline-flex; align-items:center; }
 /* A Nextdoor post ready, on Home (socialposts.js readyCardHtml). */
