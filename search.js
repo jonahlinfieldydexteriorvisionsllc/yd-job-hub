@@ -357,6 +357,17 @@
 
   const seesSnowPrivate = () => can('snow', 'see') || can('billing', 'see');
 
+  // The price beside a bid or job in the results (Jonah, wish 6 Nov 2026:
+  // "in search bar next to bids i want price of the job to show"), the
+  // same figure the Bids board shows: its job price, or for a snow bid,
+  // which has no whole-job price, its price per push. Only reached by
+  // someone who sees jobs, who sees this price on the Job tab already.
+  function priceWords(d) {
+    const p = fn('parseMoney') ? parseMoney(d.jobPrice) : parseFloat(d.jobPrice) || 0;
+    if (p) return fn('fmtMoney') ? fmtMoney(p) : dollars(Math.round(p * 100));
+    return fn('perPushText') ? perPushText(d) : '';
+  }
+
   function buildJobs() {
     if (can('jobs', 'see')) {
       if (typeof loadAllJobs !== 'function') return [];
@@ -372,7 +383,7 @@
         const where = [d.address, d.city].filter(Boolean).join(', ');
         return entry('jobs', {
           title: name, tag: bid ? 'Bid' : 'Job',
-          sub: joinDot([est ? '#' + est : '', status, where]),
+          sub: joinDot([est ? '#' + est : '', priceWords(d), status, where]),
           nums: [est, d.phone],
           more: [d.firstName, d.lastName, d.business, d.address, d.city, d.state, d.zip, d.phone, d.email,
                  (d.serviceTypes || []).join(' '), d.qbInvoice],
