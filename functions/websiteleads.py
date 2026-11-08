@@ -316,8 +316,7 @@ def just_email(db, f, why, flag="", robot=False):
         how = "Reply to this email and it goes to them." if to else "No email given: call or text them."
     else:
         subject = "YD Gives Back nomination%s: %s" % (flag, f.get("name"))
-        head, lines, to = "A YD Gives Back nomination from the website.", \
-            "Name: %s\nPhone: %s" % (f.get("name"), f.get("phone")), None
+        head, lines, to = "A YD Gives Back nomination from the website.", nomination_text(f), f.get("email") or None
         how = "Call or text them."
     if not _quiet_room(db, robot):
         print("website form: the day's inbox-only limit is reached")
@@ -390,12 +389,41 @@ def reply(claude, done, spent=None):
 # is a name and a phone number for that one"). Nobody here is asking for work, so
 # no lead and no reply written by Claude: a card on My to-dos, a buzz and the
 # email. POST /site/nominate, from the same box of limits as the form above.
+#
+# Its own page since 7 Nov 2026 (his words: "fill out the first and last name
+# check box for if its a residential or commercial and add a box for email
+# too"): first + last, kind, email. A post with only `name` (the old form, or a
+# page still open from before) is taken the same as before. The keys are NOT
+# fname/lname: just_email tells the work form from this one by `fname`.
+NOMINATION_KINDS = {"residential": "Residential", "commercial": "Commercial"}
+
+
 def clean_nomination(body):
-    """{name, phone}, or None without a name and a whole phone number."""
+    """{name, first, last, kind, email, phone}, or None without a name and a
+    whole phone number. kind and email may be empty."""
     if not isinstance(body, dict):
         return None
-    name, phone = _box(body.get("name"), 120), _box(body.get("phone"), 30)
-    return {"name": name, "phone": phone} if name and len(re.sub(r"\D", "", phone)) >= 10 else None
+    first, last = _box(body.get("first"), 60), _box(body.get("last"), 60)
+    name = " ".join(x for x in (first, last) if x) or _box(body.get("name"), 120)
+    phone = _box(body.get("phone"), 30)
+    email = _box(body.get("email"), 120).lower()
+    email = email if leads.ADDRESS.fullmatch(email or "-") else ""
+    kind = str(body.get("kind") or "").strip().lower()
+    kind = kind if kind in NOMINATION_KINDS else ""
+    if not name or len(re.sub(r"\D", "", phone)) < 10:
+        return None
+    return {"name": name, "first": first, "last": last, "kind": kind, "email": email, "phone": phone}
+
+
+def nomination_text(f):
+    """The lines of a nomination, as the card and both emails show them."""
+    lines = ["Name: " + f.get("name", "")]
+    if f.get("kind"):
+        lines.append("Home or business: " + NOMINATION_KINDS.get(f["kind"], f["kind"]))
+    lines.append("Phone: " + f.get("phone", ""))
+    if f.get("email"):
+        lines.append("Email: " + f["email"])
+    return "\n".join(lines)
 
 
 def take_nomination(db, f):
@@ -410,7 +438,7 @@ def take_nomination(db, f):
     try:
         db.collection("boards").document("todo").collection("cards").document(cid).create({
             "title": ("🌱 YD Gives Back nomination — " + f["name"])[:200],
-            "notes": "From the website. Name: %s\nPhone: %s" % (f["name"], f["phone"]),
+            "notes": "From the website.\n" + nomination_text(f),
             "checklist": [], "column": col, "order": int(dg._now().timestamp() * 1000), "due": day, "dueTime": None,
             "remindMins": None, "hasReminder": False, "remindUids": [], "noReminder": False, "type": "phone",
             "urgency": "normal", "labels": [], "color": None, "assignees": [], "jobId": None, "jobName": None,
@@ -425,9 +453,10 @@ def take_nomination(db, f):
 def tell_nomination(f):
     """The same in his inbox. After the browser has its answer, so it never raises."""
     import cards
-    body = "A YD Gives Back nomination from the website.\n\nName: %s\nPhone: %s\n\nIt's on My to-dos." % (f["name"], f["phone"])
+    body = "A YD Gives Back nomination from the website.\n\n%s\n\nIt's on My to-dos." % nomination_text(f)
     try:
-        sent = cards.send_mail(dg.OWNER_EMAIL, "YD Gives Back nomination: " + f["name"], body)
+        sent = cards.send_mail(dg.OWNER_EMAIL, "YD Gives Back nomination: " + f["name"], body,
+                               reply_to=f.get("email") or None)
         if sent.get("error"):
             print("nomination: email not sent --", sent["error"])
     except Exception as err:        # noqa: BLE001 -- the card is safe either way
