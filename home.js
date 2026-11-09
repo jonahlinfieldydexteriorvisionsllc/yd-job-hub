@@ -129,7 +129,7 @@
       return '<div class="hm-cl on">🌙 Set for Claude tonight <button class="link-btn" onclick="homeClaudeBack(\'' + k + '\')">Take back</button></div>';
     }
     if (said) return '<div class="hm-cl"><button class="link-btn" onclick="homeClaudeOpen(\'' + k + '\')">' + said + '</button></div>';
-    return '<div class="hm-cl"><button class="link-btn" onclick="homeForClaude(\'' + k + '\')">🤖 For Claude</button></div>';
+    return '<div class="hm-cl"><button class="link-btn" onclick="homeForClaude(\'' + k + '\')">🤖 Have Claude do this</button></div>';
   }
 
   // An appointment already over today: dimmed. Nothing ticks one off, so it
@@ -933,7 +933,14 @@
   }
 
   // Booked and in progress, with the next day each is on the calendar.
-  function jobsHtml(all) {
+  // top: the owner's copy at the top of Home, under the bids he's working on
+  // (Jonah, 9 Nov 2026: "bids im working on tab is good for top of home page
+  // i want another one for jobs were working on that lists our current job
+  // and the next ones in order"). The same list, the ones under way first,
+  // then the booked ones in line; nothing at all when there are none, like
+  // the bids above it. It then leaves the cards further down, so a job is
+  // listed once.
+  function jobsHtml(all, top) {
     if (!seesJobs()) return '';
     const next = signedIn() && window.YDCalendar && YDCalendar.nextForJobs ? YDCalendar.nextForJobs(60) : {};
     const list = all.filter(j => ['booked', 'inprogress'].indexOf(statusOf(j)) !== -1).map(j => ({ j: j, n: next[j._id] || null }))
@@ -970,11 +977,15 @@
     const unplanned = signedIn() ? booked.filter(x => !x.n).length : 0;
     // A few of each, then "Show all": on a wide screen the cards sit side by
     // side, and one long list left the cards beside it with a tall gap.
+    if (top && !list.length) return '';
+    const shown = top ? 6 : 4;
     const body = !list.length ? empty('Nothing booked yet.') :
-      (inProg.length ? sub('🔨 In progress', inProg.length) + capped('jobsP', inProg.map(row), 4) : '') +
+      (inProg.length ? sub(top ? '🔨 Working on now' : '🔨 In progress', inProg.length) + capped('jobsP', inProg.map(row), shown) : '') +
       (booked.length ? sub('📌 Booked — up next, in line', booked.length) +
         (unplanned ? '<div class="hm-note">📅 ' + unplanned + ' not scheduled yet</div>' : '') +
-        capped('jobsB', booked.map(row), 4) : '');
+        capped('jobsB', booked.map(row), shown) : '');
+    if (top) return '<div class="hm-bidsnow hm-jobsnow">' +
+      card('jobs', '🔨 Jobs we’re working on', list.length, ['Jobs board', "homeBoard('jobs')"], body) + '</div>';
     return card('jobs', '🔨 Booked & in progress', list.length || '', ['Jobs board', "homeBoard('jobs')"], body);
   }
 
@@ -1367,9 +1378,9 @@
     if (!crewish && isOwner()) {
       const side = [nextdoorHtml(), waitingHtml(), notesHtml(), clockHtml(), eodHtml()].filter(Boolean).join('');
       const day = myDayHtml(d);
-      return greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() + bidsNowHtml(all) + scheduleHtml(d) + statsHtml(all) +
+      return greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() + bidsNowHtml(all) + jobsHtml(all, true) + scheduleHtml(d) + statsHtml(all) +
         '<div class="hm-lead"><div class="hm-lead-side">' + side + '</div>' + day + '</div>' +
-        '<div class="hm-grid">' + [crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all, true), equipmentHtml()]
+        '<div class="hm-grid">' + [crewDayHtml(d), invoiceHtml(all), bidsHtml(all, true), equipmentHtml()]
           .filter(Boolean).join('') + '</div>';
     }
     const cards = crewish

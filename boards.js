@@ -1842,7 +1842,7 @@
         esc(k.title || 'Untitled') + '</div></div>' +
       (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
         (jobNumOf(k) ? ' <span class="job-num">#' + esc(jobNumOf(k)) + '</span>' : '') + '</div>' : '') +
-      (board.id === TODO_BOARD && !inLastColumn ? forClaudeLine(board, k) : '') +
+      (!inLastColumn ? forClaudeLine(board, k) : '') +
       // Finished: said with a tick, not by striking the title through -- a
       // struck grey title in Done (or Built) was hard to read at all.
       (inLastColumn ? '<div class="bd-card-line bd-done-by"><span class="bd-done-tick">✓</span> ' +
@@ -2879,14 +2879,19 @@
   const claudeCan = (board, k) => !!board && !!k && claudeOwns(board, k) && NOT_SERVERS.indexOf(board.id) < 0 &&
     !k.recurring && !String(k.id || '').startsWith('rc-');
   const tonightOn = k => !!k.claudeTonight && askedAgain(k);
-  // On the card itself, on My to-dos (Jonah, 5 Nov 2026: "add button to my to
-  // do cards that says for claude"): it was only at the foot of the card's
-  // window. His, as Claude's credit is.
+  // On the card itself (Jonah, 5 Nov 2026: "add button to my to do cards that
+  // says for claude"; 9 Nov: "add button for all cards on all boards that
+  // says 'have claude do this'"): every card the server's Claude can work
+  // (claudeCan: not the wish board, which is all Claude's at the night run,
+  // not Maintenance or Change orders, not a recurring crew task), on every
+  // board, until it is done. The Bids and Jobs boards are jobs, not cards:
+  // Claude works a bid from its estimate on the Job tab. His, as Claude's
+  // credit is.
   function forClaudeLine(board, k) {
     if (!isOwner() || !claudeCan(board, k)) return '';
     return tonightOn(k) ? '<div class="bd-card-line bd-for-claude">🌙 Claude does this tonight</div>'
       : '<div class="bd-card-line bd-for-claude"><button type="button" class="bd-card-act" draggable="false" ' +
-        'onclick="event.stopPropagation(); bdForClaude(\'' + safeId(board.id) + '\', \'' + safeId(k.id) + '\')">🤖 For Claude</button></div>';
+        'onclick="event.stopPropagation(); bdForClaude(\'' + safeId(board.id) + '\', \'' + safeId(k.id) + '\')">🤖 Have Claude do this</button></div>';
   }
   function forClaude(boardId, cardId, text) {
     const board = boards[boardId], k = (cards[boardId] || {})[cardId];
@@ -2963,10 +2968,10 @@
   };
   window.bdForClaude = async function (boardId, cardId) {
     const got = await ydForm(TONIGHT_ASK, [{ id: 'note', label: 'Your note to Claude', value: '', multiline: true, rows: 4 }],
-      { title: 'For Claude tonight', ok: 'Set for Claude' });
+      { title: 'Have Claude do this', ok: 'Set for Claude' });
     if (got && forClaude(boardId, cardId, got.note)) showToast('Set — Claude does it tonight');
   };
-  const TONIGHT_ASK = 'Say what you want done. Claude does it overnight and leaves its answer on the to-do. Any email it writes ' +
+  const TONIGHT_ASK = 'Say what you want done. Claude does it overnight and leaves its answer on the card. Any email it writes ' +
     'waits in your Gmail Drafts: nothing is sent.';
 
   function claudeHtml(board, k) {

@@ -6307,6 +6307,10 @@ html[data-bids-page] #panel-boards .section-head { display: none; }
 .hm-bidsnow { margin-bottom: 14px; }
 .hm-bidsnow .hm-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); column-gap: 18px; }
 .hm-bidsnow .hm-more { grid-column: 1 / -1; }
+/* The jobs card under it has headings (Working on now, Booked) and a line
+   counting the unscheduled ones: each across the whole card, the jobs in
+   columns under it. */
+.hm-jobsnow .hm-sub, .hm-jobsnow .hm-note { grid-column: 1 / -1; }
 
 /* For Claude, on a to-do card. */
 .bd-for-claude { margin-top: 2px; }
