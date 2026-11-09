@@ -51,7 +51,6 @@
   let lastHtml = '';        // what was last put on the screen
   const expanded = {};      // list key -> "Show all" pressed
   let soonTimer = 0, ticker = 0;
-  let nextdoorUntil = 0;  // the phone's buzz is on its way to the Nextdoor card (homeNextdoor)
   let authAt = 0;           // when this person's sign-in was heard
 
   // ------------------------------------------------------------ the words
@@ -1121,13 +1120,6 @@
   // What is waiting on this person: notes from the crew, hours to look at,
   // changes the crew asked for, receipts to sort, subcontractor bills to
   // put with a client.
-  // A Nextdoor post waiting for his tap: the whole job, here (socialposts.js).
-  function nextdoorHtml() {
-    if (!signedIn() || !isOwner() || !window.YDPosts || !YDPosts.readyToPost) return '';
-    const ps = YDPosts.readyToPost();
-    return ps.length ? card('nextdoor', '🏘️ Ready for Nextdoor', ps.length > 1 ? ps.length : '', ['All posts', 'openPosts()'], YDPosts.readyHtml(ps), true) : '';
-  }
-
   function waitingHtml() {
     if (!signedIn()) return '';
     const rows = [];
@@ -1176,8 +1168,9 @@
       });
     }
     // Posts that need him (socialposts.js): one held for his OK, one that
-    // didn't go up. One line; a tap opens Posts. One ready for Nextdoor has
-    // its own card (nextdoorHtml).
+    // didn't go up. One line; a tap opens the Media tab. One ready for
+    // Nextdoor isn't here at all: it waits at the top of Media, with a count
+    // on the tab (Jonah, 9 Nov 2026: "not smack dab on my home page").
     if (isOwner() && window.YDPosts && YDPosts.needs) {
       const ps = YDPosts.needs().filter(p => p.status !== 'ready');
       if (ps.length) {
@@ -1376,7 +1369,7 @@
     // and they are for sorting later, when he's home. Nobody's day comes after
     // them (review of 4 Nov 2026; Jonah: "Yes, move it").
     if (!crewish && isOwner()) {
-      const side = [nextdoorHtml(), waitingHtml(), notesHtml(), clockHtml(), eodHtml()].filter(Boolean).join('');
+      const side = [waitingHtml(), notesHtml(), clockHtml(), eodHtml()].filter(Boolean).join('');
       const day = myDayHtml(d);
       return greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() + bidsNowHtml(all) + jobsHtml(all, true) + scheduleHtml(d) + statsHtml(all) +
         '<div class="hm-lead"><div class="hm-lead-side">' + side + '</div>' + day + '</div>' +
@@ -1425,7 +1418,6 @@
       if (again && typed.v) again.value = typed.v;
       if (again && typed.focus) { again.focus(); try { again.setSelectionRange(typed.at, typed.at); } catch (e) {} }
     }
-    if (nextdoorUntil && el('hm-nextdoor')) { const on = Date.now() < nextdoorUntil; nextdoorUntil = 0; if (on) window.homeGo('nextdoor'); }
     manageTicker();
   }
   // Many changes arrive together (a whole calendar, every card on a board):
@@ -1494,13 +1486,6 @@
     // A crew lead's jobs are the crew's list (html).
     const c = el('hm-' + id) || (id === 'jobs' ? el('hm-cjobs') : null);
     if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-  // The phone's "Nextdoor post ready" (notify.js, app.js): Home, at its card,
-  // which may still be on its way when the app has only just opened.
-  window.homeNextdoor = function () {
-    nextdoorUntil = Date.now() + 30000;
-    switchTab('home');
-    render();
   };
   // The list itself, not the top of Supplies (Jonah, 4 Nov 2026: it "just
   // takes me to the supplies that need to be orderd for jobs page"): Orders

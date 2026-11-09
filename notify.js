@@ -389,10 +389,10 @@
       else if (want === 'eodreports' && window.openEodReports) window.openEodReports();
       // A tax or filing date coming up (deadlines.js).
       else if (want === 'deadlines' && window.openDeadlines) window.openDeadlines();
-      // A post held or not gone up (socialposts.js); one ready for Nextdoor
-      // is on Home.
+      // A post held or not gone up (socialposts.js): the Media tab; one ready
+      // for Nextdoor: the Media tab at its card.
       else if (want === 'posts' && window.openPosts) window.openPosts();
-      else if (want === 'nextdoor' && window.homeNextdoor) window.homeNextdoor();
+      else if (want === 'nextdoor' && window.openNextdoor) window.openNextdoor();
       else if (want === 'paysheet' && window.openPaySheet) window.openPaySheet();
       else if (want === 'invoices' && window.openInvoices) window.openInvoices();
       else if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {

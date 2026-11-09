@@ -111,7 +111,7 @@
                tabs that don't fit the bar; a tablet and a laptop have no More. -->
           <div class="menu-group menu-wide">
             <div class="menu-head">Screens</div>
-            <button id="menuPosts" hidden onclick="closeHeaderMenu(); openPosts()">📣 Posts</button>
+            <!-- Posts is the Media tab now (socialposts.js). -->
             <!-- services.js: the owner's services list; everyone else reads it as "What we do". -->
             <button id="menuServices" hidden onclick="closeHeaderMenu(); openServices()">🧰 Services</button>
             <button id="menuChangeLog" hidden onclick="closeHeaderMenu(); openChangeLog()">🕘 Change history</button>
@@ -170,6 +170,7 @@
     <button class="tab-btn" id="tabBoards" hidden onclick="switchTab('boards')"><span class="tab-icon">📌</span>Boards</button>
     <button class="tab-btn" id="tabEquipment" hidden onclick="switchTab('equipment')"><span class="tab-icon">🚜</span>Equipment</button>
     <button class="tab-btn" id="tabContacts" hidden onclick="switchTab('contacts')"><span class="tab-icon">📇</span>Contacts</button>
+    <button class="tab-btn" id="tabMedia" hidden onclick="switchTab('media')"><span class="tab-icon">📣</span>Media<span class="tab-count" id="mediaTabCount"></span></button>
     <button class="tab-btn" id="tabDashboard" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>All Jobs</button>
     <button class="tab-btn tab-more" id="tabMore" onclick="openMore()"><span class="tab-icon">☰</span>More</button>
   </div>
@@ -1038,6 +1039,15 @@
         <div id="rcHistory"></div>
       </div>
     </div>
+  </div>
+
+  <!-- ============ TAB: MEDIA ============ -->
+  <!-- Posts on Facebook, Instagram, Google and Nextdoor (socialposts.js): what
+       needs him at the top -- a Nextdoor post to put up -- then what went up,
+       when and where, what is coming, the schedule and the hookups. The
+       owner's alone. -->
+  <div class="tab-panel" id="panel-media">
+    <div id="spBody"></div>
   </div>
 
   <!-- ============ TAB: EQUIPMENT ============ -->

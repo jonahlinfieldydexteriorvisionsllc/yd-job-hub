@@ -1,4 +1,4 @@
-// 📣 Posts: Facebook, Google Business Profile and Nextdoor on a schedule.
+// 📣 Media: Facebook, Instagram, Google Business Profile and Nextdoor posts on a schedule.
 // Jonah (30 Oct 2026): "lets setup automatic facebook, nextdoors, and google
 // profile posting. i want a set schedule for all this where posts go up at
 // the right times on the right days."
@@ -8,14 +8,19 @@
 // After photos, else one of the month's seasonal posts -- and every five
 // minutes a post whose time has come goes up. Nextdoor keeps its Publish API
 // from a business promoting itself, so a Nextdoor post is "ready" at its time
-// and one tap on Home opens Nextdoor with the words already in.
+// and one tap opens Nextdoor with the words already in.
 //
-// Here (the owner's alone): what is coming up and what went up, each post's
-// words, photos and time to change, hold, let go, skip or post now; the
-// schedule itself (settings/social.slots -- social.py DEFAULT_SLOTS until he
-// changes it); the line under every post (signOff); and hooking up Facebook
-// and Google. Home's Waiting on you shows posts that need him (YDPosts.needs);
-// one ready for Nextdoor has its own card there (YDPosts.readyHtml).
+// The Media tab (the owner's alone). Jonah, 9 Nov 2026: "hub should have a
+// media tab that tracks when posts went up and where and thats where the
+// nextdoor thing should be not smack dab on my home page." At its top, what
+// needs him: a Nextdoor post ready to put up, a post held for his OK or one
+// that didn't go up. Under that, one part at a time: Went up (every post
+// that went up, when and where, with its link), Coming up (each post's words,
+// photos and time to change, hold, let go, skip or post now), The schedule
+// (settings/social.slots -- social.py DEFAULT_SLOTS until he changes it, and
+// the line under every post) and Hook up (Facebook, Instagram, Google). It was
+// a window called Posts until then. Home's Waiting on you has one line for a
+// post held or not gone up (YDPosts.needs), nothing for Nextdoor.
 (function () {
   'use strict';
 
@@ -64,10 +69,21 @@
 
   let cfg = null;          // settings/social as read
   let hook = null;         // /social/status: the hookups
-  let posts = {};          // socialPosts by id (from three weeks back)
+  let posts = {};          // socialPosts by id (from three weeks back), kept live
+  // Every post that went up, older ones too: read when Went up is looked at
+  // (status == posted, one question), not watched. The live three weeks above
+  // win over these where both have a post.
+  let old = {};
+  let oldAt = 0;           // when it was last read (0 = never)
+  let oldReading = false;
+  let oldFailed = false;
+  const OLD_AGAIN_MS = 5 * 60000;
+  let upPlace = '';        // Went up: one place only, or '' for all of them
   let unwatch = null;
   let who = null;
-  let view = 'coming';     // coming | schedule | hookup
+  // up | coming | schedule | hookup. Went up first: the tracking was the ask.
+  let view = 'up';
+  let readyUntil = 0;      // a Nextdoor push is on its way to the ready card (openNextdoor)
   let open = null;         // the post opened for changing
   let busy = '';           // what the server is doing for us
   const drafts = {};       // post id -> words typed and not saved yet (kept through redraws)
@@ -98,10 +114,52 @@
       changed();
     });
   }
+  // Every post that has gone up, ever. A post only gets to 'posted' once, so
+  // this list only grows; a fresh read now and then picks up older ones the
+  // live three weeks don't hold. No signal: Firestore answers from its cache.
+  async function readOld(force) {
+    if (!isOwner() || !window.YDDb || !window.YDDb.listWhere || oldReading) return;
+    if (!force && oldAt && Date.now() - oldAt < OLD_AGAIN_MS) return;
+    oldReading = true;
+    const was = who;
+    try {
+      const got = await window.YDDb.listWhere('socialPosts', 'status', '==', 'posted');
+      if (who !== was) return;            // signed out or in as someone else meanwhile
+      old = {};
+      Object.entries(got || {}).forEach(([id, d]) => { old[id] = Object.assign({ id: id }, d); });
+      oldAt = Date.now();
+      oldFailed = false;
+    } catch (e) {
+      console.warn('[posts] earlier posts not read:', e && (e.code || e.message));
+      oldFailed = true;
+    } finally { oldReading = false; }
+    changed();
+  }
+  const panelOn = () => !!(el('panel-media') && el('panel-media').classList.contains('active'));
   function changed() {
     document.dispatchEvent(new CustomEvent('yd-social'));
-    if (el('spModal') && el('spModal').classList.contains('active')) draw();
+    countOnTab();
+    if (panelOn()) draw();
   }
+  // What needs him, on the tab itself (the sidebar copies it): a Nextdoor
+  // post to put up, one held for his OK, one that didn't go up.
+  function countOnTab() {
+    const c = el('mediaTabCount');
+    if (!c) return;
+    const n = window.YDPosts ? window.YDPosts.needs().length : 0;
+    const t = n ? String(n) : '';
+    if (c.textContent !== t) c.textContent = t;
+    if (el('tabMedia')) el('tabMedia').classList.toggle('tab-counted', !!n);
+    // A phone has Media under More: a dot on More, and what More says under it.
+    if (typeof ydMoreDot === 'function') ydMoreDot();
+    if (typeof TAB_HINT === 'object') {
+      const ready = window.YDPosts ? window.YDPosts.readyToPost().length : 0;
+      TAB_HINT.media = !n ? MEDIA_HINT
+        : ready === n ? '🟡 ' + n + ' Nextdoor post' + (n === 1 ? '' : 's') + ' ready to put up'
+        : '🟡 ' + n + ' post' + (n === 1 ? ' needs' : 's need') + ' you' + (ready ? ' — ' + ready + ' for Nextdoor' : '');
+    }
+  }
+  const MEDIA_HINT = 'When each post went up and where, what goes up next, and Nextdoor posts to put up';
 
   const addDays = (ymd, n) => { const d = new Date(ymd + 'T12:00:00'); d.setDate(d.getDate() + n); return localYMD(d); };
   function when(iso) {
@@ -109,7 +167,8 @@
     if (isNaN(t)) return '';
     const day = localYMD(t), today = localYMD();
     const d = day === today ? 'Today' : day === addDays(today, 1) ? 'Tomorrow' : day === addDays(today, -1) ? 'Yesterday'
-      : t.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      : t.toLocaleDateString('en-US', Object.assign({ weekday: 'short', month: 'short', day: 'numeric' },
+          t.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}));   // last year's posts say so
     return d + ', ' + t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toLowerCase();
   }
   const slotsOf = c => (Array.isArray((c || {}).slots) ? c.slots : DEFAULT_SLOTS);
@@ -125,9 +184,12 @@
       .catch(e => { console.warn('[posts] not saved:', e && (e.code || e.message)); showToast('Not saved yet — ' + what); });
   }
   function patchPost(id, patch, what) {
-    const p = posts[id];
+    const p = posts[id] || old[id];
     if (!p) return Promise.resolve();
     Object.assign(p, patch);
+    // The same post may be in both (the live weeks and the read of every
+    // post that went up): both show the change.
+    if (posts[id] && old[id] && old[id] !== posts[id]) Object.assign(old[id], patch);
     changed();
     return Promise.resolve(window.YDDb.put('socialPosts', id, Object.assign({ updatedAt: new Date().toISOString() }, patch)))
       .catch(e => { console.warn('[posts] not saved:', e && (e.code || e.message)); showToast('Not saved — ' + what); });
@@ -157,38 +219,88 @@
     if (r && !r.off) showToast(r.planned ? 'Planned ' + r.planned + ' post' + (r.planned === 1 ? '' : 's') : 'Nothing new to plan');
   }
 
-  // ------------------------------------------------------------ the window
-
-  function modal() {
-    let m = el('spModal');
-    if (m) return m;
-    m = document.createElement('div');
-    m.className = 'modal-overlay';
-    m.id = 'spModal';
-    m.innerHTML = '<div class="modal sp-modal" role="dialog" aria-labelledby="spTitle">' +
-      '<div class="modal-head"><h2 id="spTitle">📣 Posts</h2>' +
-      '<button class="modal-close" onclick="closePosts()" aria-label="Close">&times;</button></div>' +
-      '<div class="modal-body" id="spBody"></div></div>';
-    document.body.appendChild(m);
-    return m;
-  }
+  // ------------------------------------------------------------ the tab
 
   function draw() {
     const body = el('spBody');
-    if (!body || !el('spModal').classList.contains('active')) return;
+    if (!body) return;
+    if (!isOwner()) { body.innerHTML = ''; return; }     // signed out: nothing of his left on screen
+    if (!panelOn()) return;
     // A box being typed in is never wiped by a redraw; it draws on leaving it.
     if (body.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName) &&
         document.activeElement.type !== 'checkbox') { body.dataset.later = '1'; return; }
     body.dataset.later = '';
     if (!cfg) { body.innerHTML = '<p class="empty-msg">Loading…</p>'; return; }
-    if (!cfg.on) { body.innerHTML = startHtml(); return; }
-    const tabs = [['coming', 'Coming up'], ['schedule', 'The schedule'], ['hookup', 'Hook up']];
+    if (!cfg.on) { body.innerHTML = section('📣 Start posting', '', startHtml()); return; }
+    const views = [
+      ['up', '📜 Went up', upWords()],
+      ['coming', '🗓️ Coming up', comingWords()],
+      ['schedule', '⏰ The schedule', scheduleWords()],
+      ['hookup', '🔌 Hook up', hookupWords()],
+    ];
+    const titles = { up: '📜 Posts that went up', coming: '🗓️ Coming up', schedule: '⏰ The schedule', hookup: '🔌 Hook up' };
     body.innerHTML =
       (busy ? '<div class="sp-busy">⏳ ' + esc(busy) + '</div>' : '') +
-      autoHtml() +
-      '<div class="sp-tabs">' + tabs.map(([k, w]) => '<button class="btn btn-sm' + (view === k ? ' btn-filled' : '') +
-        '" onclick="spView(\'' + k + '\')">' + w + '</button>').join('') + '</div>' +
-      (view === 'schedule' ? scheduleHtml() : view === 'hookup' ? hookupHtml() : comingHtml());
+      readyHtml() + needsHtml() +
+      '<div class="mn-views sp-views">' + views.map(([k, name, small]) =>
+        '<button type="button" class="mn-view-btn' + (view === k ? ' on' : '') + '" aria-pressed="' + (view === k) +
+          '" onclick="spView(\'' + k + '\')"><b>' + name + '</b><small>' + esc(small) + '</small></button>').join('') + '</div>' +
+      section(titles[view] || '', view === 'up' ? upBadge() : '',
+        view === 'schedule' ? autoHtml() + scheduleHtml() : view === 'hookup' ? hookupHtml() : view === 'coming' ? comingHtml() : upHtml());
+    // A Nextdoor push tapped: the ready card, once it has drawn.
+    if (readyUntil && el('spReadyBox')) {
+      const on = Date.now() < readyUntil;
+      readyUntil = 0;
+      if (on) el('spReadyBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+  const section = (title, badge, inner, id) => '<div class="section"' + (id ? ' id="' + id + '"' : '') + '>' +
+    '<div class="section-head"><span class="section-title">' + title + '</span>' +
+      '<span class="section-badge">' + esc(badge || '') + '</span></div>' +
+    '<div class="section-body">' + inner + '</div></div>';
+
+  // What each part's button says is in it.
+  const monthKey = iso => { const t = new Date(iso); return isNaN(t) ? '' : localYMD(t).slice(0, 7); };
+  const upAt = p => p.postedAt || p.at;
+  const isDown = p => !!p.takenDownAt;
+  function upWords() {
+    const month = localYMD().slice(0, 7);
+    const n = wentUp().filter(p => !isDown(p) && monthKey(upAt(p)) === month).length;
+    return n ? n + ' this month' : (oldAt ? 'None yet this month' : '');
+  }
+  function upBadge() {
+    const n = wentUp().filter(p => !isDown(p)).length;
+    return n ? n + ' in all' : '';
+  }
+  function comingWords() {
+    const next = Object.values(posts).filter(p => ['queued', 'notConnected'].indexOf(p.status) !== -1 &&
+      new Date(p.at).getTime() > Date.now()).sort((a, b) => String(a.at).localeCompare(String(b.at)))[0];
+    return next ? 'Next: ' + (NAMES[next.place] || '') + ' ' + when(next.at) : 'Nothing planned';
+  }
+  function scheduleWords() {
+    if (cfg.pausedUntil && cfg.pausedUntil >= localYMD()) {
+      return 'Paused until ' + new Date(cfg.pausedUntil + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+    return cfg.auto === false ? 'Each waits for your OK' : 'Posts go up by themselves';
+  }
+  function hookupWords() {
+    if (!hook) return '';
+    const off = PLACES.filter(p => placeOn(cfg, p) && !hooked(p));
+    return off.length ? off.map(p => NAMES[p]).join(', ') + ' not hooked up' : 'All hooked up';
+  }
+
+  // ---- what needs him, over every part
+
+  // Held for his OK, or didn't go up. One ready for Nextdoor has its own card.
+  function needsHtml() {
+    const list = Object.values(posts).filter(p => p.status === 'held' || p.status === 'failed')
+      .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    return list.length ? section('⚠️ Needs you', String(list.length), list.map(rowHtml).join('')) : '';
+  }
+  function readyHtml() {
+    const list = window.YDPosts.readyToPost();
+    return list.length ? section('🏘️ Ready for Nextdoor', list.length > 1 ? String(list.length) : '',
+      list.map(readyCardHtml).join(''), 'spReadyBox') : '';
   }
 
   function startHtml() {
@@ -240,12 +352,14 @@
   function comingHtml() {
     const today = localYMD();
     const list = Object.values(posts).sort((a, b) => String(a.at).localeCompare(String(b.at)));
-    const needs = list.filter(p => NEEDS.indexOf(p.status) !== -1);
+    // What needs him is over every part (needsHtml, readyHtml); what went up
+    // is Went up. Here: what is still to come, and what never went up.
     const ahead = list.filter(p => NEEDS.indexOf(p.status) === -1 && p.day >= today &&
       ['queued', 'posting', 'notConnected'].indexOf(p.status) !== -1);
-    const gone = list.filter(p => ['posted', 'missed', 'skipped'].indexOf(p.status) !== -1 ||
+    const gone = list.filter(p => ['missed', 'skipped'].indexOf(p.status) !== -1 ||
       (p.status === 'notConnected' && p.day < today)).reverse().slice(0, 30);
     const off = PLACES.filter(p => placeOn(cfg, p) && !hooked(p));
+    const paused = cfg.pausedUntil && cfg.pausedUntil >= today;
     let byDay = '', lastDay = '';
     ahead.forEach(p => {
       if (p.day !== lastDay) {
@@ -260,16 +374,62 @@
           (off.length === 1 ? ' isn’t' : ' aren’t') + ' hooked up yet — ' + (off.indexOf('nextdoor') !== -1 && off.length === 1
             ? '' : 'until ' + (off.length === 1 ? 'it is' : 'they are') + ', those posts are kept here for you to copy. ') +
           '<button class="link-btn" onclick="spView(\'hookup\')">Hook up</button></div>' : '') +
-      (needs.length ? '<h3 class="sp-h">Needs you</h3>' + needs.map(rowHtml).join('') : '') +
-      '<h3 class="sp-h">Coming up</h3>' +
+      (paused ? '<div class="sp-paused">⏸ Posting is paused until ' + esc(new Date(cfg.pausedUntil + 'T12:00:00').toLocaleDateString('en-US',
+          { weekday: 'short', month: 'short', day: 'numeric' })) + ' <button class="link-btn" onclick="spPause(\'\')">Start again now</button></div>' : '') +
       (byDay || '<p class="empty-msg">Nothing planned yet' + (cfg.planWaiting
         ? ' — ' + cfg.planWaiting + ' slot' + (cfg.planWaiting === 1 ? ' has' : 's have') + ' nothing to post yet'
         : '') + '.</p>') +
       '<div class="field-actions"><button class="btn btn-sm" onclick="spPlanNow()"' + (busy ? ' disabled' : '') +
         '>Plan them now</button><button class="btn btn-sm" onclick="spOwnOpen()">+ A post of your own</button></div>' +
       (own ? ownHtml() : '') +
-      (gone.length ? '<details class="sp-gone"><summary>Gone up and past (' + gone.length + ')</summary>' +
+      (gone.length ? '<details class="sp-gone"><summary>Missed or skipped (' + gone.length + ')</summary>' +
         gone.map(rowHtml).join('') + '</details>' : '');
+  }
+
+  // ---- went up
+
+  // Every post that went up: the read of all of them, with the live three
+  // weeks over it (a tick or a takedown shows at once). Newest first.
+  function wentUp() {
+    const all = Object.assign({}, old);
+    Object.values(posts).forEach(p => { if (p.status === 'posted') all[p.id] = p; else delete all[p.id]; });
+    return Object.values(all).sort((a, b) => String(upAt(b)).localeCompare(String(upAt(a))));
+  }
+  function upHtml() {
+    if (!oldAt && !oldFailed) readOld();
+    const all = wentUp();
+    if (!all.length) {
+      return oldFailed ? '<p class="empty-msg">Couldn’t read the posts that went up. <button class="link-btn" onclick="spReadOld()">Try again</button></p>'
+        : oldAt ? '<p class="empty-msg">Nothing has gone up yet.</p>' : '<p class="empty-msg">Reading…</p>';
+    }
+    const live = all.filter(p => !isDown(p));
+    const count = place => live.filter(p => p.place === place).length;
+    // One place at a time, or all of them: buttons that wrap, never a row
+    // that scrolls sideways. Only places something went up on.
+    const places = PLACES.filter(p => count(p) || all.some(x => x.place === p));
+    const chip = (k, words) => '<button type="button" class="btn btn-sm' + (upPlace === k ? ' btn-filled' : '') +
+      '" aria-pressed="' + (upPlace === k) + '" onclick="spUpPlace(\'' + k + '\')">' + words + '</button>';
+    const shown = upPlace ? all.filter(p => p.place === upPlace) : all;
+    let out = '', month = '';
+    shown.forEach(p => {
+      const m = monthKey(upAt(p));
+      if (m !== month) {
+        month = m;
+        const inMonth = shown.filter(x => monthKey(upAt(x)) === m);
+        const n = inMonth.filter(x => !isDown(x)).length, down = inMonth.length - n;
+        // One taken down is listed but not counted: said, so the sum adds up.
+        out += '<h4 class="sp-day">' + esc(m ? new Date(m + '-15T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 'No date') +
+          ' · ' + n + ' post' + (n === 1 ? '' : 's') + (down ? ' up, ' + down + ' taken down' : '') + '</h4>';
+      }
+      out += rowHtml(p, true);
+    });
+    return '<div class="sp-choice sp-up-places">' + chip('', 'All · ' + live.length) +
+        places.map(p => chip(p, ICONS[p] + ' ' + NAMES[p] + ' · ' + count(p))).join('') + '</div>' +
+      (out || '<p class="empty-msg">Nothing has gone up on ' + esc(NAMES[upPlace] || '') + ' yet.</p>') +
+      '<p class="hint">Deleted one on the site yourself? Open it here and tap “It’s not up any more”: it stays listed and leaves the counts. ' +
+        'These are the posts Job Hub put up or you ticked off; one posted straight on the site isn’t here.</p>' +
+      (oldFailed ? '<p class="hint">Couldn’t read the older ones just now — these are the last three weeks. ' +
+        '<button class="link-btn" onclick="spReadOld()">Try again</button></p>' : '');
   }
 
   function hooked(place) {
@@ -287,20 +447,29 @@
   const stageTag = x => (x.stage === 'before' || x.stage === 'during')
     ? '<span class="sp-photo-tag">' + STAGE_WORDS[x.stage] + '</span>' : '';
 
-  function rowHtml(p) {
-    const st = STATUS[p.status] || [p.status, ''];
+  // listed: in Went up, where every row is up, so "✓ Up" on each says nothing.
+  function rowHtml(p, listed) {
+    const down = p.status === 'posted' && isDown(p);
+    const st = down ? ['Taken down', 'sp-st-info'] : STATUS[p.status] || [p.status, ''];
+    const chip = listed === true && p.status === 'posted' && !down ? '' : '<span class="sp-st ' + st[1] + '">' + esc(st[0]) + '</span>';
     const isOpen = open === p.id;
     const what = whatOf(p);
     const photos = photosOf(p);
-    return '<div class="sp-row' + (isOpen ? ' open' : '') + '" id="spRow_' + safeId(p.id) + '">' +
+    // One that went up shows when it really went up (Post now, a tick for
+    // Nextdoor), not the time it was planned for.
+    const t = p.status === 'posted' ? upAt(p) : p.at;
+    return '<div class="sp-row' + (isOpen ? ' open' : '') + (down ? ' sp-down' : '') + '" id="spRow_' + safeId(p.id) + '">' +
       '<button class="sp-row-head" onclick="spOpen(\'' + safeId(p.id) + '\')" aria-expanded="' + isOpen + '">' +
         '<span class="sp-place">' + ICONS[p.place] + '</span>' +
-        '<span class="sp-main"><b>' + esc(NAMES[p.place] || '') + ' · ' + esc(when(p.at)) + '</b>' +
+        '<span class="sp-main"><b>' + esc(NAMES[p.place] || '') + ' · ' + esc(when(t)) + '</b>' +
           '<small>' + esc(what) + '</small>' +
           (isOpen ? '' : '<small class="sp-snip">' + esc(String(p.text || '').slice(0, 110)) + '</small>') +
-          '<span class="sp-st ' + st[1] + '">' + esc(st[0]) + '</span></span>' +
+          chip + '</span>' +
         (photos[0] ? '<img class="sp-thumb" src="' + esc(photos[0].thumb || photos[0].url) + '" alt="" loading="lazy">' : '') +
       '</button>' +
+      // Where to see it, without opening the post first.
+      (p.status === 'posted' && !down && !isOpen && /^https:\/\//.test(p.link || '')
+        ? '<a class="sp-see" href="' + esc(p.link) + '" target="_blank" rel="noopener">See it on ' + esc(NAMES[p.place] || 'the site') + ' ↗</a>' : '') +
       (p.status === 'held' && p.heldWhy ? '<div class="sp-why">⚠️ ' + esc(p.heldWhy) + '</div>' : '') +
       // "Not hooked up yet" is said once at the top, not under every post.
       ((p.status === 'failed' || p.status === 'notConnected') && p.error && !/isn.t hooked up yet$/.test(p.error)
@@ -369,7 +538,12 @@
     acts.push(btn("spCopy('" + id + "')", '📋 Copy the words'));
     if (live && p.kind === 'job' && p.status !== 'ready') acts.push(btn("spRewrite('" + id + "')", '✍️ Write it again'));
     if (live && p.status !== 'ready') acts.push(btn("spSkip('" + id + "')", 'Skip it'));
-    if (p.link) acts.push('<a class="btn btn-sm" href="' + esc(p.link) + '" target="_blank" rel="noopener">See it ↗</a>');
+    if (p.link && /^https:\/\//.test(p.link)) acts.push('<a class="btn btn-sm" href="' + esc(p.link) + '" target="_blank" rel="noopener">See it ↗</a>');
+    // One deleted on the site stays on the list, said to be gone, and leaves
+    // the counts. Nothing on the site changes from here.
+    if (p.status === 'posted') {
+      acts.push(isDown(p) ? btn("spDown('" + id + "', false)", 'It’s still up') : btn("spDown('" + id + "', true)", 'It’s not up any more'));
+    }
     return '<div class="sp-open">' +
       (live && p.status !== 'ready'
         ? '<label class="sp-lbl">The words' + (p.place === 'google' ? ' <span class="muted">(Google adds a Call button)</span>' : '') +
@@ -549,8 +723,8 @@
           '<li><button class="btn btn-sm btn-filled" onclick="spGoogle()">Check Google</button></li>' +
         '</ol>';
     const ndHtml = '<p>Nextdoor keeps posting by itself for public agencies, local news, local events and marketplace listings, ' +
-        'not for a business promoting itself. So at each Nextdoor time your phone is told and the post waits on Home, where one ' +
-        'tap opens Nextdoor with the words already in — add the photos and post.</p>';
+        'not for a business promoting itself. So at each Nextdoor time your phone is told and the post waits at the top of ' +
+        'Media, where one tap opens Nextdoor with the words already in — add the photos and post.</p>';
     return '<div class="sp-place-box"><b>📘 Facebook</b>' + fbHtml + '</div>' +
       '<div class="sp-place-box"><b>📷 Instagram</b>' + igHtml + '</div>' +
       '<div class="sp-place-box"><b>📍 Google Business Profile</b>' + gHtml + '</div>' +
@@ -559,18 +733,42 @@
 
   // ------------------------------------------------------------ taps
 
-  window.openPosts = function () {
+  // The tab arrived at (app.js switchTab): read what may have moved since.
+  function render() {
     if (!isOwner()) return;
-    modal().classList.add('active');
     draw();
     loadCfg();
     loadHook();
+    // Went up's button counts the month, which can be older than the live weeks.
+    readOld();
+  }
+  // Every old way in -- Home's Waiting on you, a push about a post held or
+  // not gone up, Search, a habit -- lands on the tab.
+  window.openPosts = function () {
+    if (!isOwner() || typeof switchTab !== 'function' || !el('panel-media')) return;
+    showTab();
+    if (panelOn()) render();
+    else switchTab('media');
   };
-  window.closePosts = function () {
-    const m = el('spModal');
-    if (m) m.classList.remove('active');
+  // The phone's "Nextdoor post ready": the tab, at its card, which may still
+  // be on its way when the app has only just opened.
+  window.openNextdoor = function () {
+    readyUntil = Date.now() + 30000;
+    window.openPosts();
   };
-  window.spView = k => { view = k; open = null; draw(); };
+  // An app.js from before 9 Nov (one load can mix old and new files) still
+  // sends a Nextdoor push here.
+  window.homeNextdoor = window.openNextdoor;
+  window.spView = k => { view = k; open = null; draw(); if (k === 'up') readOld(); };
+  window.spUpPlace = k => { upPlace = PLACES.indexOf(k) !== -1 ? k : ''; open = null; draw(); };
+  window.spReadOld = () => readOld(true);
+  window.spDown = (id, on) => {
+    const p = posts[id] || old[id];
+    if (!p || p.status !== 'posted') return;
+    const was = p.takenDownAt || null;
+    patchPost(id, { takenDownAt: on ? new Date().toISOString() : null }, on ? 'marking it taken down' : 'marking it up');
+    if (window.showUndo) showUndo(on ? 'Marked as taken down' : 'Marked as still up', () => patchPost(id, { takenDownAt: was }, 'putting it back'));
+  };
   window.spStart = async () => {
     await save({ on: true, auto: true, from: new Date().toISOString() }, 'starting the schedule');
     view = 'coming';
@@ -648,14 +846,6 @@
     const why = !isOn && ((p.photosLeftOut || []).find(l => l.id === row.id) || {}).why;
     if (window.showUndo && (full || why)) showUndo(why ? 'Claude left this one out: ' + why : 'Swapped in for the last photo', () => patchPost(id, { photos: was }, 'the photos'));
   };
-  // From the Nextdoor card on Home: the same post, open in the Posts window.
-  window.spHomeChange = id => {
-    window.openPosts();
-    view = 'coming';
-    open = id;
-    choosing[id] = false;
-    window.spChoose(id);
-  };
   window.spMove = (id, v) => {
     const t = new Date(v);
     if (!v || isNaN(t)) return;
@@ -685,44 +875,50 @@
       showUndo('Skipped', () => patchPost(id, was, 'putting it back'));
     } else showToast('Skipped');
   };
-  window.spDone = id => patchPost(id, { status: 'posted', postedAt: new Date().toISOString(), heldWhy: null }, 'ticking it off');
+  // Said at once: with no signal the write only settles once it reaches the server.
+  window.spDone = id => {
+    if (!posts[id]) return;
+    patchPost(id, { status: 'posted', postedAt: new Date().toISOString(), heldWhy: null }, 'ticking it off');
+    showToast('✓ Ticked off — it’s under Went up');
+  };
 
-  // ---- A Nextdoor post ready, on Home. Jonah (4 Nov 2026): "keep the tap but
-  // make it doable from my homepage." Everything that tap needs is on the
-  // card: the words, the photos, the button that opens Nextdoor and the tick.
-  // Opening Nextdoor doesn't mean it went up, so nothing is saved until he
-  // says so; the tick just takes the lead once he has been there.
-  const HOME_WORDS = 240;       // past this the words fold to a few lines
-  const homeOpened = {};        // opened from here this visit
-  const homeWhole = {};         // showing all the words
-  window.spHomeOpened = id => { homeOpened[id] = true; changed(); };
-  window.spHomeWords = id => { homeWhole[id] = !homeWhole[id]; changed(); };
+  // ---- A Nextdoor post ready, at the top of Media. Jonah (4 Nov 2026): "keep
+  // the tap"; (9 Nov) on the Media tab, not Home. Everything that tap needs
+  // is on the card: the words, the photos, the button that opens Nextdoor and
+  // the tick. Opening Nextdoor doesn't mean it went up, so nothing is saved
+  // until he says so; the tick just takes the lead once he has been there.
+  const READY_WORDS = 240;      // past this the words fold to a few lines
+  const readyOpened = {};       // opened from here this visit
+  const readyWhole = {};        // showing all the words
+  window.spReadyOpened = id => { readyOpened[id] = true; changed(); };
+  window.spReadyWords = id => { readyWhole[id] = !readyWhole[id]; changed(); };
   // Nothing can put a ready post back (the rules refuse it), so it asks.
-  window.spHomeSkip = async id => {
+  window.spReadySkip = async id => {
     if (await ydConfirm('Skip this Nextdoor post? It won’t come back. The next one comes up on its own day.', { ok: 'Skip it' })) window.spSkip(id);
   };
   function readyCardHtml(p) {
     const id = safeId(p.id);
     const text = String(p.text || '');
-    const long = text.length > HOME_WORDS;
-    const clip = long && !homeWhole[id];
-    const been = !!homeOpened[id];
+    const long = text.length > READY_WORDS;
+    const clip = long && !readyWhole[id];
+    const been = !!readyOpened[id];
     const photos = photosOf(p);
     const openIt = (words, lead) => '<a class="btn' + (lead ? ' btn-filled' : '') + '" href="' + esc(shareUrl(p)) + '" target="_blank" rel="noopener" ' +
-      'onclick="spHomeOpened(\'' + id + '\')">' + words + '</a>';
+      'onclick="spReadyOpened(\'' + id + '\')">' + words + '</a>';
     const tick = lead => '<button class="btn' + (lead ? ' btn-filled' : '') + '" onclick="spDone(\'' + id + '\')">✓ I posted it</button>';
-    return '<div class="sp-home">' +
-      '<div class="sp-home-what"><b>' + esc(whatOf(p)) + '</b><small>Ready since ' + esc(when(p.readyAt || p.at)) + '</small></div>' +
-      '<div class="sp-text' + (clip ? ' sp-home-clip' : '') + '">' + esc(text) + '</div>' +
-      (long ? '<button class="sp-home-more" onclick="spHomeWords(\'' + id + '\')">' + (clip ? 'Show all the words' : 'Show less') + '</button>' : '') +
+    return '<div class="sp-ready">' +
+      '<div class="sp-ready-what"><b>' + esc(whatOf(p)) + '</b><small>Ready since ' + esc(when(p.readyAt || p.at)) + '</small></div>' +
+      '<div class="sp-text' + (clip ? ' sp-ready-clip' : '') + '">' + esc(text) + '</div>' +
+      (long ? '<button class="sp-ready-more" onclick="spReadyWords(\'' + id + '\')">' + (clip ? 'Show all the words' : 'Show less') + '</button>' : '') +
       (photos.length ? '<div class="sp-photos">' + photos.map((x, i) => '<span class="sp-photo">' +
           '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.thumb || x.url) + '" alt="Photo ' + (i + 1) + '"></a>' + stageTag(x) + '</span>').join('') + '</div>' +
         '<p class="hint">Tap a photo to open it, save it, then add it in Nextdoor.</p>' : '') +
-      (p.kind === 'job' && p.jobId ? '<button class="sp-home-more" onclick="spHomeChange(\'' + id + '\')">Change the photos</button>' : '') +
-      '<div class="sp-acts sp-home-acts">' +
+      // The job's other photos, to swap in, right here on the card.
+      (p.kind === 'job' && p.jobId ? chooserHtml(p) : '') +
+      '<div class="sp-acts sp-ready-acts">' +
         (been ? tick(true) + openIt('Open Nextdoor again') : openIt('🏘️ Open Nextdoor with the words in', true) + tick()) +
         '<button class="btn" onclick="spCopy(\'' + id + '\')">📋 Copy words</button>' +
-        '<button class="btn" onclick="spHomeSkip(\'' + id + '\')">Skip it</button>' +
+        '<button class="btn" onclick="spReadySkip(\'' + id + '\')">Skip it</button>' +
       '</div></div>';
   }
   window.spNow = async id => {
@@ -891,21 +1087,35 @@
     hook = null;
     open = null;
     own = null;
-    const m = el('spModal');
-    if (m) m.classList.remove('active');
+    old = {};
+    oldAt = 0;
+    oldFailed = false;
+    upPlace = '';
+    // Nothing half-typed or half-done carries over to another sign-in.
+    [drafts, choosing, readyOpened, readyWhole].forEach(o => Object.keys(o).forEach(k => { delete o[k]; }));
+    showTab();
     if (k) { loadCfg(); watchPosts(); } else { if (unwatch) { unwatch(); unwatch = null; } posts = {}; changed(); }
   });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && who) loadCfg(); });
+  // The tab is the owner's alone (the rules let only him read socialPosts).
+  function showTab() {
+    const t = el('tabMedia');
+    if (t) t.hidden = !who;
+  }
 
   window.YDPosts = {
-    // Home's Waiting on you: posts that need him (held, ready on Nextdoor,
-    // didn't go up), soonest first.
+    // The tab's count and Home's Waiting on you: posts that need him (held,
+    // ready on Nextdoor, didn't go up), soonest first.
     needs: () => isOwner() && cfg && cfg.on
       ? Object.values(posts).filter(p => NEEDS.indexOf(p.status) !== -1).sort((a, b) => String(a.at).localeCompare(String(b.at)))
       : [],
-    // Home's Nextdoor card: posts waiting for his tap, and the card for them.
+    // Posts waiting for his tap on Nextdoor (the card at the top of Media).
     readyToPost: () => window.YDPosts.needs().filter(p => p.status === 'ready'),
-    readyHtml: list => list.map(readyCardHtml).join(''),
+    // app.js switchTab, on arriving at the tab.
+    render: render,
+    // A home.js from before 9 Nov (one load can mix old and new files) asks
+    // for the Nextdoor card it used to draw: nothing now, so Home doesn't break.
+    readyHtml: () => '',
     on: () => !!(cfg && cfg.on),
     names: NAMES,
     icons: ICONS,

@@ -68,7 +68,7 @@ key -- once Google has approved the project for the Business Profile API.
 Instagram: the business account linked to the Facebook Page, reached with the
 Page's token (the same hookup: Instagram API with Facebook Login). Nextdoor:
 its Publish API is not for a business promoting itself, so a Nextdoor post is
-"ready" at its time, his phone is told, and a card on Home opens Nextdoor with
+"ready" at its time, his phone is told, and a card on the Media tab opens Nextdoor with
 the words already in (socialposts.js).
 
 Post records: socialPosts/{place}_{YYYYMMDD}_{HHMM} (one per slot time) or
@@ -696,7 +696,7 @@ def _talk_words(title, excerpt, link):
 def yard_talk(cfg, used_ideas, now):
     """Yard Talk posts live on the site and still to be announced, oldest
     first, shaped as seasonal posts (ideaId yt-<address>), so the schedule, the
-    checks and the Posts screen treat them the same way. The site's own feed
+    checks and the Media tab treat them the same way. The site's own feed
     says what is live: a post waiting on his OK isn't in it, and nothing is
     announced before it can be read. settings/social.yardTalk false = off."""
     if cfg.get("yardTalk") is False:
@@ -1131,12 +1131,13 @@ def publish(db, pid, people=None, now=None, by_hand=False):
             done = google_post(db, d, now)
         elif place == "nextdoor":
             # Nextdoor keeps its Publish API from a business promoting itself:
-            # the post is ready for him on Home, one tap from Nextdoor.
+            # the post is ready for him at the top of the Media tab, one tap
+            # from Nextdoor (Jonah, 9 Nov 2026: not on Home).
             ref.set({"status": "ready", "readyAt": now.isoformat(), "updatedAt": _stamp()}, merge=True)
             if by_hand:
                 return []
             return _push(db, people, "\U0001F4E3 Nextdoor post ready",
-                         "It's on Home: one tap opens Nextdoor with the words already in.",
+                         "It's in Media: one tap opens Nextdoor with the words already in.",
                          "yd-social-nextdoor", opens="nextdoor")
         else:
             raise RuntimeError("no such place")

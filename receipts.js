@@ -2036,8 +2036,9 @@
   function badges(open) {
     const c = el('rcTabCount');
     if (c) c.textContent = open ? String(open) : '';
-    const more = el('tabMore');
-    if (more) more.toggleAttribute('data-dot', open > 0);
+    // The dot on More (app.js): Media's count lights it too.
+    if (typeof ydMoreDot === 'function') ydMoreDot();
+    else if (el('tabMore')) el('tabMore').toggleAttribute('data-dot', open > 0);
     // What More says under "Receipts" when it is opened.
     if (typeof TAB_HINT === 'object') {
       TAB_HINT.receipts = open ? '🟡 ' + open + ' to sort' : 'Purchases from your email — put each on its job';

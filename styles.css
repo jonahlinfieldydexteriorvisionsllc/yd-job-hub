@@ -942,7 +942,7 @@
        (All Jobs since Home took its place, 14 Oct 2026). They stay in the
        DOM -- switchTab finds a tab's button by its id, and More lists them
        from there -- they are just not on the bar. */
-    #tabContacts, #tabEquipment, #tabDashboard, #tabMoney { display:none; }
+    #tabContacts, #tabEquipment, #tabDashboard, #tabMoney, #tabMedia { display:none; }
     /* Snow too, but for while a storm is going (storm.js data-storm-on;
        Jonah, 26 Oct 2026: "snow tab doesnt need to be on main nav on mobile"):
        then it is a tap away on every phone. Otherwise it is in More. */
@@ -4991,7 +4991,10 @@
     .page { padding-bottom:104px; }
     .tab-bar { position:fixed; left:0; right:0; bottom:0; margin:0; border-radius:0; z-index:100; overflow:hidden;
                box-shadow:0 -3px 16px rgba(43,36,51,.24); padding-bottom:env(safe-area-inset-bottom, 0px); }
-    .tab-btn { flex:1 1 0; min-width:0; min-height:58px; padding:9px 1px 8px; font-size:9.5px; letter-spacing:0;
+    /* Each tab is as wide as its word, plus an even share of what is left, so
+       the gaps between words are even: equal widths left no gap at all between
+       EQUIPMENT and CUSTOMERS once Media made it thirteen (9 Nov 2026). */
+    .tab-btn { flex:1 1 auto; min-width:44px; min-height:58px; padding:9px 1px 8px; font-size:9.5px; letter-spacing:0;
                border-bottom:none; border-top:4px solid transparent; }
     .tab-btn.active { border-top-color:var(--accent); border-bottom-color:transparent; }
     .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
@@ -5000,6 +5003,10 @@
     /* A count beside the word ran into the next tab: it sits by the icon. */
     .tab-btn { position:relative; }
     .tab-count { position:absolute; top:3px; left:calc(50% + 9px); margin-left:0; }
+    /* A short word with a count (MEDIA 3): room for the count inside its own
+       tab. A class set with the count (socialposts.js countOnTab): Chrome
+       didn't redraw :has(:empty) when the count's words changed. */
+    .tab-btn.tab-counted { min-width:64px; }
     /* What floats over the foot of the screen sits above the bar. */
     #toast { bottom:calc(70px + var(--lift-pill, 0px) + var(--lift-undo, 0px) + env(safe-area-inset-bottom, 0px)) !important; }
     .net-pill { bottom:calc(64px + env(safe-area-inset-bottom, 0px)); }
@@ -6010,15 +6017,17 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .bd-pickup-no { font-size:16px; }
 .bd-pickup-code img { display:block; width:220px; max-width:100%; height:auto; background:#fff; padding:10px; border-radius:8px; border:1px solid var(--border); }
 
-/* 📣 Posts (socialposts.js): the posting schedule's window. */
-.sp-modal { max-width:720px; }
+/* 📣 Media (socialposts.js): posts on Facebook, Instagram, Google and Nextdoor.
+   It was a window called Posts until 9 Nov 2026; the tab keeps its sp- names. */
+/* Four parts, a button each that says what is in it: Money's buttons, four
+   across, two by two on a phone. */
+.mn-views.sp-views { grid-template-columns:repeat(4, minmax(0, 1fr)); }
+@media (max-width:860px) { .mn-views.sp-views { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
 .sp-busy { background:var(--st-info-soft); color:var(--st-info); border-radius:8px; padding:8px 12px; margin-bottom:10px; font-weight:600; }
 .sp-auto { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
 .sp-choice { display:flex; flex-wrap:wrap; gap:6px; }
 .sp-pause, .sp-paused { font-size:13px; }
 .sp-paused { color:var(--st-due-ink); font-weight:600; }
-.sp-tabs { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin:6px 0 12px; }
-.sp-tabs .btn { padding:9px 6px; }
 .sp-h { font-size:15px; margin:14px 0 6px; }
 .sp-day { font-size:12px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin:12px 0 4px; }
 .sp-note { background:var(--st-info-soft); border-radius:8px; padding:8px 12px; font-size:13px; margin-bottom:8px; }
@@ -6066,17 +6075,25 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .sp-pick-warn { position:absolute; left:3px; bottom:3px; font-size:15px; line-height:1; }
 .sp-acts { display:flex; flex-wrap:wrap; gap:6px; }
 .sp-acts a.btn { text-decoration:none; display:inline-flex; align-items:center; }
-/* A Nextdoor post ready, on Home (socialposts.js readyCardHtml). */
-.sp-home { display:flex; flex-direction:column; gap:8px; }
-.sp-home + .sp-home { border-top:1px solid var(--border); margin-top:12px; padding-top:12px; }
-.sp-home-what small { display:block; color:var(--muted); font-size:13px; }
+/* A Nextdoor post ready, at the top of Media (socialposts.js readyCardHtml). */
+.sp-ready { display:flex; flex-direction:column; gap:8px; }
+.sp-ready + .sp-ready { border-top:1px solid var(--border); margin-top:12px; padding-top:12px; }
+.sp-ready-what small { display:block; color:var(--muted); font-size:13px; }
 /* The bottom padding would show a slice of the next line; a border in the box's own colour doesn't. */
-.sp-home-clip { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:4; overflow:hidden; padding-bottom:0; border-bottom:10px solid var(--surface-2); }
-.sp-home-more { background:none; border:0; padding:0; min-height:44px; text-align:left; color:var(--brand-ink); font:inherit; font-size:14px; cursor:pointer; }
-.sp-home .sp-photo img { width:72px; height:72px; }
-.sp-home .hint { margin:0; }
-.sp-home-acts .btn { flex:1 1 130px; justify-content:center; text-align:center; }
-.sp-home-acts > :first-child { flex-basis:100%; }
+.sp-ready-clip { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:4; overflow:hidden; padding-bottom:0; border-bottom:10px solid var(--surface-2); }
+.sp-ready-more { background:none; border:0; padding:0; min-height:44px; text-align:left; color:var(--brand-ink); font:inherit; font-size:14px; cursor:pointer; }
+.sp-ready .sp-photo img { width:72px; height:72px; }
+.sp-ready .hint { margin:0; }
+.sp-ready-acts .btn { flex:1 1 130px; justify-content:center; text-align:center; }
+.sp-ready-acts > :first-child { flex-basis:100%; }
+/* Went up: one place or all, then each post with where to see it. */
+.sp-up-places { margin:2px 0 6px; }
+.sp-see { display:inline-flex; align-items:center; min-height:44px; margin:-8px 12px 0 42px; font-size:14px; font-weight:600;
+          color:var(--brand-ink); text-decoration:none; }
+.sp-see:hover { text-decoration:underline; }
+/* One deleted on the site: still listed, said to be gone, faded. */
+.sp-row.sp-down .sp-main b { text-decoration:line-through; }
+.sp-row.sp-down .sp-thumb { opacity:.5; }
 .sp-own { border:1px dashed var(--border); border-radius:10px; padding:10px 12px; margin:10px 0; display:flex; flex-direction:column; gap:8px; }
 .sp-gone { margin-top:14px; }
 .sp-gone summary { cursor:pointer; font-weight:600; padding:6px 0; }

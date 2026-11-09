@@ -822,7 +822,7 @@ function openMore() {
       return b && !b.hidden;
     });
   // Screens only: the tabs that don't fit the bar and the screens that aren't
-  // tabs (Posts, Services, Change history, which a tablet or laptop finds under
+  // tabs (Services, Change history, which a tablet or laptop finds under
   // ⋯), then the one door to the settings. Notes, the end of the day, Search
   // and Help are all under ⋯ on every size, so they aren't here too (review of
   // 4 Nov 2026: the two menus repeated most of each other).
@@ -833,8 +833,6 @@ function openMore() {
   const log = document.getElementById('menuChangeLog');
   const extras = [].concat(typeof ydCan === 'function' && ydCan('jobs', 'see')
     ? [{ label: '📝 Bids', hint: SIDEBAR_PLACES.bids.hint, call: "closeMore(); homeBoard('bids')" }]
-    : []).concat(owner && typeof window.openPosts === 'function'
-    ? [{ label: '📣 Posts', hint: 'What goes up on Facebook, Google and Nextdoor, and when', call: 'closeMore(); openPosts()' }]
     : []).concat(signedIn && typeof window.openServices === 'function'
     ? [(owner
         ? { label: '🧰 Services', hint: 'The services list, by kind of work, and what to tell a homeowner' }
@@ -861,11 +859,26 @@ function closeMore() {
   const s = document.getElementById('moreSheet');
   if (s) s.classList.remove('active');
 }
+// A dot on More while a screen behind it has a count on its tab (Receipts to
+// sort, Media posts that need him): on a phone those tabs are only in More.
+// Each file calls this after setting its count, so one never takes the
+// other's dot away.
+function ydMoreDot() {
+  const more = document.getElementById('tabMore');
+  if (!more) return;
+  const bar = phoneBar();
+  const any = TABS.filter(n => bar.indexOf(n) === -1).some(n => {
+    const b = document.getElementById(tabButtonId(n));
+    const c = b && !b.hidden && b.querySelector('.tab-count');
+    return !!(c && c.textContent.trim());
+  });
+  more.toggleAttribute('data-dot', any);
+}
 function tabButtonId(name) {
   return { home: 'tabHome', crewjobs: 'tabCrewJobs', job: 'tabJob', snow: 'tabSnow', clock: 'tabClock',
     dashboard: 'tabDashboard', contacts: 'tabContacts',
     equipment: 'tabEquipment', calendar: 'tabCalendar', boards: 'tabBoards',
-    supplies: 'tabSupplies', matdash: 'tabSupplies', receipts: 'tabReceipts', money: 'tabMoney' }[name] || '';
+    supplies: 'tabSupplies', matdash: 'tabSupplies', receipts: 'tabReceipts', money: 'tabMoney', media: 'tabMedia' }[name] || '';
 }
 // The materials half of Supplies, hidden from crew.
 function matSectionHidden() {
@@ -908,8 +921,6 @@ function tidyHeaderMenu(m) {
   if (search) search.hidden = !(signedIn && typeof window.openSearch === 'function');
   const all = document.getElementById('menuSettings');
   if (all) all.hidden = !(signedIn && typeof window.openSettings === 'function');
-  const posts = document.getElementById('menuPosts');
-  if (posts) posts.hidden = !(signedIn && window.YDAuth.isOwner && typeof window.openPosts === 'function');
   // A button's own computed display says whether it shows, whatever its
   // group or the closed menu around it are doing.
   m.querySelectorAll('.menu-group').forEach(g => {
@@ -999,7 +1010,8 @@ function closeOnTapOutside(id) {
 // it is bought from.
 // Home comes first and is where the app opens (Jonah, 14 Oct 2026: "make
 // home page for the job hub with overviews of things") -- home.js.
-const TABS = ['home', 'crewjobs', 'job', 'supplies', 'receipts', 'money', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
+const TABS = ['home', 'crewjobs', 'job', 'supplies', 'receipts', 'money', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'media', 'dashboard'];
+// media: posts on Facebook, Instagram, Google and Nextdoor (socialposts.js) -- the owner's.
 // crewjobs: the crew's Jobs tab (crewjobs.js) -- for whoever cannot see the Job tab, and crew leads.
 // Five on a phone's bar for anybody: Home took All Jobs' place on the
 // owner's (Home has the jobs on the go and the ones to invoice; the full
@@ -1012,7 +1024,7 @@ const phoneBar = () => PHONE_TABS.filter(n => (n !== 'snow' || document.document
   (n !== 'job' || !document.documentElement.hasAttribute('data-lead')));
 const TAB_LABEL = { home: '🏡 Home', crewjobs: '🧰 Jobs', job: '📐 Job', snow: '❄️ Snow', clock: '🕒 Clock',
   calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies', receipts: '🧾 Receipts', money: '💵 Money',
-  equipment: '🚜 Equipment',
+  equipment: '🚜 Equipment', media: '📣 Media',
   dashboard: '📊 All Jobs', contacts: '📇 Contacts' };
 const TAB_HINT = { job: 'The office side of a job: the estimate, materials and costs',
   boards: 'Bids, jobs, to-dos and crew task lists',
@@ -1021,7 +1033,8 @@ const TAB_HINT = { job: 'The office side of a job: the estimate, materials and c
   money: 'What you’re owed, what’s to pay, payroll and tax dates',
   equipment: 'What each machine and truck is due for',
   dashboard: 'Every job with its price and what it made',
-  contacts: 'People to ring later' };
+  contacts: 'People to ring later',
+  media: 'When each post went up and where, what goes up next, and Nextdoor posts to put up' };
 // The same screens as the crew see them: without prices, bids or what the
 // season cost, so the words should not promise them.
 const TAB_HINT_CREW = { boards: 'Crew tasks and the boards shared with you',
@@ -1096,6 +1109,7 @@ function switchTab(name) {
   if (name === 'supplies' && window.YDSupplies) YDSupplies.render();
   if (name === 'receipts' && window.YDReceipts) YDReceipts.render();
   if (name === 'money' && window.YDMoney) YDMoney.render();
+  if (name === 'media' && window.YDPosts && YDPosts.render) YDPosts.render();
   if (name === 'crewjobs' && window.YDCrewJobs) YDCrewJobs.render();
   if (name === 'home' && window.YDHome) YDHome.render();
   if (name === 'job' && window.YDJobPicker) YDJobPicker.sync();
@@ -1116,11 +1130,12 @@ function switchTab(name) {
 // summary opened nothing.
 // The end of the day (eod.js): the crew's reminder opens their list, the
 // owner's "it is in" opens the reports.
-// A tax or filing date coming up (functions/deadlines.py) opens its window;
-// so does a post held or not gone up (functions/social.py). One ready for
-// Nextdoor opens Home at its card.
+// A tax or filing date coming up (functions/deadlines.py) opens its window.
+// A post held or not gone up (functions/social.py) opens the Media tab, and
+// one ready for Nextdoor opens it at that post's card (Jonah, 9 Nov 2026:
+// on the Media tab, "not smack dab on my home page").
 const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports',
-  deadlines: 'openDeadlines', posts: 'openPosts', nextdoor: 'homeNextdoor', changeorders: 'openChangeOrders', paysheet: 'openPaySheet', invoices: 'openInvoices', pins: 'openPins' };
+  deadlines: 'openDeadlines', posts: 'openPosts', nextdoor: 'openNextdoor', changeorders: 'openChangeOrders', paysheet: 'openPaySheet', invoices: 'openInvoices', pins: 'openPins' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }
@@ -7078,7 +7093,7 @@ try { localStorage.removeItem('ydjobhub_sidebarPreview'); } catch (e) { /* priva
 // alone it would have been a heading over one line.
 const SIDEBAR_GROUPS = [
   { name: 'Today', tabs: ['home', 'calendar'] },
-  { name: 'Jobs', tabs: ['crewjobs', 'job', 'bids', 'supplies', 'dashboard', 'boards', 'contacts'] },
+  { name: 'Jobs', tabs: ['crewjobs', 'job', 'bids', 'supplies', 'dashboard', 'boards', 'contacts', 'media'] },
   { name: 'Crew & machines', tabs: ['clock', 'snow', 'equipment'] },
   { name: 'Money', tabs: ['money', 'receipts'] }
 ];

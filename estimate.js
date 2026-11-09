@@ -2660,8 +2660,8 @@
     if (!p && !done) return st === 'booked' || st === 'inprogress' ? '<div class="est-care">' + tick + '</div>' : '';
     if (no) return '<div class="est-care">' + tick + '</div>';
     return '<div class="est-care">' + tick + '</div><div class="est-care">📣 ' + (p
-        ? 'Social posts written ' + esc(when(p.at)) + '. They go up by themselves on the posting schedule (📣 Posts) once the job has After photos.'
-        : 'This job’s social posts write themselves and go up on the posting schedule (📣 Posts) once it has After photos.') +
+        ? 'Social posts written ' + esc(when(p.at)) + '. They go up by themselves on the posting schedule (📣 Media) once the job has After photos.'
+        : 'This job’s social posts write themselves and go up on the posting schedule (📣 Media) once it has After photos.') +
       ' <button class="btn btn-sm" onclick="estPosts()"' + (postsBusy[currentJobId] ? ' disabled' : '') + '>' +
         (postsBusy[currentJobId] ? 'Writing…' : p ? 'Write them again' : 'Write the posts') + '</button></div>';
   }
