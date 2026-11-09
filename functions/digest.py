@@ -436,8 +436,10 @@ def county_alerts():
 # A job's address becomes a map point once, kept in jobGeo/{jobId} (server
 # only), and looked up again only when the address changes (geo.py does the
 # looking up). The key carries a version so a better lookup gets one more try
-# at addresses the old one could not find.
-GEO_VERSION = "2"
+# at addresses the old one could not find. "3" (9 Nov 2026): geo.py stopped
+# taking an OpenStreetMap match in another town and ZIP, so every point is
+# looked up once more under that rule.
+GEO_VERSION = "3"
 
 
 def _job_point(job_id, j):

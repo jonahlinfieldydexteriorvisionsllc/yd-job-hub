@@ -442,6 +442,63 @@
 
   const WORK_TOWNS = ['Madison', 'Middleton', 'Verona', 'Fitchburg', 'Waunakee', 'Monroe'];
 
+  // OpenStreetMap answers a street it only half knows with the first road of
+  // that name anywhere in the state: a new Fitchburg street came back as one
+  // in Green Bay (9 Nov 2026) and put a customer 125 miles off the route. A
+  // match is kept only when it is where the address says: its ZIP is the one
+  // asked; or its town is and no ZIP says otherwise; or it is within
+  // FAR_MILES of the middle of that ZIP or town. The same rule as the
+  // server's (functions/geo.py, which says why): keep the two the same.
+  const FAR_MILES = 15;
+  const PLACE_KEYS = ['city', 'town', 'village', 'hamlet', 'municipality', 'suburb', 'city_district'];
+  const fiveOf = z => { const m = String(z || '').match(/\d{5}/); return m ? m[0] : ''; };
+  const fivesOf = z => String(z || '').match(/\d{5}/g) || [];   // '53711;53713': a road in two
+  const placeOf = s => String(s || '').toLowerCase().replace(/^\s*(city|town|village)\s+of\s+/, '').replace(/[^a-z]/g, '');
+  const osmUrl = params => 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams(params);
+  const osmWait = () => new Promise(r => setTimeout(r, 1100));   // their policy: 1 request/sec
+  function milesApart(aLat, aLng, bLat, bLng) {
+    const rad = d => d * Math.PI / 180;
+    const h = Math.sin(rad(bLat - aLat) / 2) ** 2 +
+      Math.cos(rad(aLat)) * Math.cos(rad(bLat)) * Math.sin(rad(bLng - aLng) / 2) ** 2;
+    return 2 * 3958.8 * Math.asin(Math.sqrt(h));
+  }
+  // The middle of the ZIP (or, with none, the town), or null when the map
+  // has neither. Nominatim's own ZIP search finds nothing; a line of text
+  // does. No answer at all throws: "couldn't check" must not read as "no
+  // such address", or the account isn't looked up again this visit.
+  async function middleOf(town, zip) {
+    const lines = [];
+    if (zip) lines.push(zip + ', WI');
+    if (town) lines.push(town + ', WI');
+    for (const q of lines) {
+      await osmWait();
+      const j = await fetch(osmUrl({ q: q, countrycodes: 'us', format: 'json', limit: '1' })).then(r => r.json());
+      if (j && j.length) return [+j[0].lat, +j[0].lon];
+    }
+    return null;
+  }
+  // The first of OpenStreetMap's matches that sits where the address says, or
+  // null. `middles` keeps each town's middle for the rest of one lookup.
+  async function whereAsked(list, town, zip, middles) {
+    const wantTown = placeOf(town);
+    for (const h of list || []) {
+      const ad = h.address || {};
+      if (ad['ISO3166-2-lvl4'] && !/-WI$/i.test(ad['ISO3166-2-lvl4'])) continue;
+      const zips = fivesOf(ad.postcode);
+      let fits = (!!zip && zips.indexOf(zip) !== -1) ||
+        (!!wantTown && !(zip && zips.length) && PLACE_KEYS.some(k => placeOf(ad[k]) === wantTown));
+      if (!fits) {
+        const key = (zip || '') + '|' + wantTown;
+        if (!(key in middles)) middles[key] = await middleOf(town, zip);
+        const mid = middles[key];
+        fits = !!mid && milesApart(+h.lat, +h.lon, mid[0], mid[1]) <= FAR_MILES;
+      }
+      if (fits) return h;
+      console.warn('[snow] passed over OpenStreetMap\'s', h.display_name, '— not in', town || '', zip || '');
+    }
+    return null;
+  }
+
   // Returns { geo, reached }: geo is null when nothing matched, and reached
   // says whether the map service answered at all -- "no signal" and "no such
   // address" need different words on the form.
@@ -466,51 +523,54 @@
     }
 
     let reached = false;
+    let unsure = false;                 // a match that couldn't be checked: not "not found"
     let first = true;
+    const zip = fiveOf(a.zip);
+    const middles = {};
+    const found = (h, town) => {
+      const ad = h.address || {};
+      return { reached: true, geo: {
+        lat: +h.lat, lng: +h.lon,
+        town: ad.city || ad.town || ad.village || ad.hamlet || town || hint || null,
+        matched: h.display_name,
+      } };
+    };
     for (const p of places) {
       const where = Object.assign({}, p);
       delete where.guess;
       for (const spelling of (p.guess ? spellings.slice(0, 1) : spellings)) {
-        if (!first) await new Promise(r => setTimeout(r, 1100));   // their policy: 1 request/sec
+        if (!first) await osmWait();
         first = false;
-        const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams(Object.assign({
-          street: spelling, state: 'WI', country: 'USA', format: 'json', limit: '1', addressdetails: '1',
+        const url = osmUrl(Object.assign({
+          street: spelling, state: 'WI', country: 'USA', format: 'json', limit: '5', addressdetails: '1',
         }, where));
+        let j = null;
         try {
-          const j = await fetch(url).then(r => r.json());
+          j = await fetch(url).then(r => r.json());
           reached = true;
-          if (j && j.length) {
-            const ad = j[0].address || {};
-            return { reached: true, geo: {
-              lat: +j[0].lat, lng: +j[0].lon,
-              town: ad.city || ad.town || ad.village || ad.hamlet || where.city || hint || null,
-              matched: j[0].display_name,
-            } };
-          }
-        } catch (e) { /* try the next spelling or town */ }
+        } catch (e) { continue; /* try the next spelling or town */ }
+        // A guessed town is the town asked for that try: with no ZIP to go
+        // on, a match elsewhere is a guess gone wrong.
+        let h = null;
+        try { h = await whereAsked(j, where.city || hint, zip, middles); } catch (e) { unsure = true; continue; }
+        if (h) return found(h, where.city);
       }
     }
     // Last, the whole thing as one line of text, the way a person would
     // type it into a map -- it copes with a few things the itemised search
     // does not, such as a town the map files under another name.
-    if (reached) {
-      await new Promise(r => setTimeout(r, 1100));
+    if (reached && (zip || hint)) {
+      await osmWait();
       const line = [spellings[0], hint, 'WI ' + (a.zip || '')].filter(Boolean).join(', ').trim();
       try {
-        const j = await fetch('https://nominatim.openstreetmap.org/search?' + new URLSearchParams({
-          q: line, countrycodes: 'us', format: 'json', limit: '1', addressdetails: '1',
+        const j = await fetch(osmUrl({
+          q: line, countrycodes: 'us', format: 'json', limit: '5', addressdetails: '1',
         })).then(r => r.json());
-        const ad = (j && j[0] && j[0].address) || {};
-        if (j && j.length && /wisconsin/i.test(ad.state || '')) {
-          return { reached: true, geo: {
-            lat: +j[0].lat, lng: +j[0].lon,
-            town: ad.city || ad.town || ad.village || ad.hamlet || hint || null,
-            matched: j[0].display_name,
-          } };
-        }
-      } catch (e) { /* nothing more to try */ }
+        const h = await whereAsked((j || []).filter(x => /wisconsin/i.test((x.address || {}).state || '')), hint, zip, middles);
+        if (h) return found(h, null);
+      } catch (e) { unsure = true; }
     }
-    return { reached: reached, geo: null };
+    return { reached: reached && !unsure, geo: null };
   }
 
   // A contact turned into a snow account (prospects.js): the form filled from

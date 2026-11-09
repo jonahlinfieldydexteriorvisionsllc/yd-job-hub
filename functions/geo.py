@@ -10,6 +10,7 @@ Census does not know (a brand-new subdivision).
 Plain lookups, no Claude.
 """
 
+import math
 import re
 import time
 
@@ -43,6 +44,11 @@ def _census(street, city, state, zip_):
               "benchmark": "Public_AR_Current", "format": "json"}
     r = requests.get(CENSUS_URL, params={k: v for k, v in params.items() if v}, timeout=20,
                      headers={"User-Agent": UA})
+    # A 4xx is the Census refusing what it was given (a street with no town
+    # or ZIP): it won't find it, which is "not found". Only its being down
+    # (5xx, no answer) is "couldn't check" -- find() then says so.
+    if 400 <= r.status_code < 500:
+        return None
     r.raise_for_status()
     hits = ((r.json().get("result") or {}).get("addressMatches")) or []
     if not hits:
@@ -54,6 +60,67 @@ def _census(street, city, state, zip_):
             "zip": c.get("zip") or zip_ or None, "source": "census"}
 
 
+# OpenStreetMap answers a street it only half knows with the first road of
+# that name anywhere in the state: a Fitchburg 53711 address on a street too
+# new for either map (9 Nov 2026) came back as the road of that name in
+# Green Bay, ZIP 54229, and put a snow customer 125 miles off the route. So a match is kept only when it is where the address says: its ZIP
+# is the one asked; or its town is the one asked and no ZIP says otherwise
+# (Wisconsin has more than one Springfield and Dunn); or it is within
+# FAR_MILES of the middle of that ZIP or town. A different ZIP alone is not
+# enough to refuse one: a "Madison" mailing address can sit in Fitchburg,
+# and the map may file the road under the next ZIP over. 15 miles covers the
+# big rural ZIPs (Mount Horeb's, Lodi's) and still refuses another part of
+# the state. Anything else is "not found", which says so on the screen,
+# where a wrong spot said nothing.
+FAR_MILES = 15
+PLACE_KEYS = ("city", "town", "village", "hamlet", "municipality", "suburb", "city_district")
+
+
+def _five(z):
+    m = re.search(r"\d{5}", str(z or ""))
+    return m.group(0) if m else ""
+
+
+def _fives(z):
+    """Every ZIP in a postcode: OpenStreetMap writes a road in two as '53711;53713'."""
+    return set(re.findall(r"\d{5}", str(z or "")))
+
+
+def _place(s):
+    """'Town of Dunn' and 'Dunn', 'Sun Prairie' and 'sun prairie' are one place."""
+    s = re.sub(r"^\s*(city|town|village)\s+of\s+", "", str(s or "").lower())
+    return re.sub(r"[^a-z]", "", s)
+
+
+def _miles(a_lat, a_lng, b_lat, b_lng):
+    rad = math.radians
+    h = (math.sin(rad(b_lat - a_lat) / 2) ** 2 +
+         math.cos(rad(a_lat)) * math.cos(rad(b_lat)) * math.sin(rad(b_lng - a_lng) / 2) ** 2)
+    return 2 * 3958.8 * math.asin(math.sqrt(h))
+
+
+def _middle(city, state, zip_):
+    """The middle of the ZIP (or, with none, the town) the address names, or
+    None. Nominatim's own ZIP search finds nothing; a line of text does."""
+    for q in ([", ".join(x for x in (zip_, state or "WI") if x)] if zip_ else []) + \
+             ([", ".join(x for x in (city, state or "WI") if x)] if city else []):
+        time.sleep(1.1)                 # their policy: one request a second
+        r = requests.get(NOMINATIM_URL, timeout=15, headers={"User-Agent": UA},
+                         params={"q": q, "countrycodes": "us", "format": "json", "limit": 1})
+        hit = r.json()
+        if hit:
+            return float(hit[0]["lat"]), float(hit[0]["lon"])
+    return None
+
+
+def _wrong_state(a, state):
+    iso = str(a.get("ISO3166-2-lvl4") or "")
+    want = str(state or "WI").strip()
+    if len(want) == 2 and iso:
+        return iso[-2:].upper() != want.upper()
+    return bool(a.get("state")) and len(want) > 2 and _place(a.get("state")) != _place(want)
+
+
 def _nominatim(street, city, state, zip_):
     tries = []
     for s in [_spelled_out(street), street]:
@@ -63,16 +130,32 @@ def _nominatim(street, city, state, zip_):
             tries.append({"street": s, "postalcode": zip_})
         if city:
             tries.append({"street": s, "city": city})
+    want_zip, want_town = _five(zip_), _place(city)
+    middle = []                         # looked up once, only when a match needs it
     for i, where in enumerate(tries):
         if i:
             time.sleep(1.1)             # their policy: one request a second
         r = requests.get(NOMINATIM_URL, timeout=15, headers={"User-Agent": UA},
-                         params=dict(where, state=state or "WI", country="USA", format="json", limit=1,
+                         params=dict(where, state=state or "WI", country="USA", format="json", limit=5,
                                      addressdetails=1))
-        hit = r.json()
-        if hit:
-            a = hit[0].get("address") or {}
-            return {"lat": float(hit[0]["lat"]), "lng": float(hit[0]["lon"]), "matched": hit[0].get("display_name", ""),
+        for h in r.json() or []:
+            a = h.get("address") or {}
+            lat, lng = float(h["lat"]), float(h["lon"])
+            if _wrong_state(a, state):
+                continue
+            zips = _fives(a.get("postcode"))
+            fits = (want_zip and want_zip in zips) or \
+                   (want_town and not (want_zip and zips) and
+                    any(_place(a.get(k)) == want_town for k in PLACE_KEYS))
+            if not fits:
+                if not middle:
+                    middle.append(_middle(city, state, want_zip))
+                fits = bool(middle[0]) and _miles(lat, lng, *middle[0]) <= FAR_MILES
+            if not fits:
+                print("geo: passed over OpenStreetMap's %r for %r, %r %r: not in that town or ZIP"
+                      % (h.get("display_name", ""), street, city, zip_))
+                continue
+            return {"lat": lat, "lng": lng, "matched": h.get("display_name", ""),
                     "town": a.get("city") or a.get("town") or a.get("village") or a.get("hamlet") or city or None,
                     "zip": a.get("postcode") or zip_ or None, "source": "openstreetmap"}
     return None
@@ -84,16 +167,19 @@ def find(street, city="", state="WI", zip_=""):
     street, city, zip_ = str(street or "").strip(), str(city or "").strip(), str(zip_ or "").strip()
     if not street:
         return None
-    reached = False
+    failed = False
     for look in (_census, _nominatim):
         try:
             got = look(street, city, state, zip_)
-            reached = True
             if got:
                 return got
         except Exception as e:          # noqa: BLE001
+            failed = True
             print("geo: %s failed: %s" % (look.__name__, e))
-    if not reached:
+    # One service saying "not there" while the other could not be asked is
+    # not "not found": the caller tries again later (jobGeo keeps no answer,
+    # the snow form says there was no signal) rather than writing it off.
+    if failed:
         raise RuntimeError("The map services could not be reached")
     return None
 
