@@ -149,6 +149,9 @@
     { id: 'upkeep', chip: '🔧 Equipment maintenance', name: 'Equipment maintenance', view: '🔧 Maintenance', total: 'Equipment maintenance' },
     { id: 'travel', chip: '✈️ Travel', name: 'Travel', view: '✈️ Travel', total: 'Travel' },
     { id: 'marketing', chip: '📣 Marketing', name: 'Marketing', view: '📣 Marketing', total: 'Marketing' },
+    // Food and drinks for the crew (Jonah, 9 Nov 2026): split off a
+    // receipt by themselves (splitOff, below).
+    { id: 'amenity', chip: '☕ Crew amenities', name: 'Crew amenities', view: '☕ Crew amenities', total: 'Crew amenities' },
     { id: 'snow', chip: '❄️ Snow', name: 'Snow', view: '❄️ Snow', total: 'Snow' },
     { id: 'sub', chip: '🤝 Subcontractor', name: 'Subcontractor', view: '🤝 Subcontractors', total: 'Subcontractors' },
     { id: 'loan', chip: '🏦 Loan payment', name: 'Loan payment', view: '🏦 Loans', total: 'Loan payments' },
@@ -200,6 +203,9 @@
     // that was put back to sort, or marked paid by hand.
     const billed = window.YDMonthlyBills && YDMonthlyBills.placeFor ? YDMonthlyBills.placeFor(r) : '';
     if (billed) return billed;
+    // Nothing on it but food and drinks (lunch or drinks for the crew), and
+    // not a household's: Crew amenities, whatever job it was bought on.
+    if (r.whose !== 'personal' && allLinesOff(r) === 'amenity') return 'amenity';
     if (r.suggest && r.suggest.jobId) return 'job';
     // Claude read it as clearly a household's (a photo still to sort --
     // the email reader files those itself, functions/receipts.py).
@@ -435,12 +441,173 @@
     return { free, idxs, lines, part, tax, last };
   }
 
+  // ------------------------------------- dividing a receipt by its lines
+  //
+  // Jonah, 9 Nov 2026: "claude should be learning so it can start doing more
+  // itself. i want claude to learn how to divide items on receipts. like any
+  // receipts with food on them or drinks those items go into "crew amenity"
+  // or whatever automatically." Plain code, no Claude call (code over
+  // Claude): when a receipt is filed anywhere for the business (a job, a
+  // vehicle, the shop...), its food and drink lines go to Crew amenities on
+  // their own first (a gas station's snacks off the fuel, a Menards
+  // receipt's water off the job), and the rest goes where it was going.
+  //
+  // It learns from him, in settings/receiptLearn.lines {key: {to, n, at, by,
+  // name}}, a line's words with sizes and numbers off (lineKey):
+  //  - lines he ticks and files to Crew amenities are food from then on (a
+  //    whole receipt filed there by hand teaches its lines once it's twice);
+  //  - a line the words call food that he ticks onto a job (or anywhere
+  //    else), or takes back off Crew amenities with Undo, is never split off
+  //    again ('keep');
+  //  - lines he divides off a receipt by hand to the shop, the office, the
+  //    property, the LLC, equipment, its upkeep or marketing go there by
+  //    themselves once he has done the same twice (LEARN_TWICE) -- so one
+  //    odd pick is never repeated on every receipt after.
+  // Never on a household's receipt (groceries stay Personal), a trip's
+  // (a meal away is Travel), a subcontractor's bill or a loan payment; and
+  // never when he ticks the lines himself: what he picks is what goes.
+  const FOOD = /\b(coffee|espresso|latte|cappuccino|tea|lemonade|juice|soda|pop|cola|coke|pepsi|sprite|mtn dew|mountain dew|dr\.? ?pepper|gatorade|powerade|body ?armor|propel|vitamin ?water|red ?bull|monster|rockstar|celsius|5[- ]?hour|energy drinks?|sports drinks?|water|smartwater|dasani|aquafina|milk|chips|doritos|cheetos|fritos|takis|lay'?s|pringles|oreos?|roller grill|cheese sticks?|pretzels?|popcorn|candy|snickers|reese'?s|m ?& ?m'?s|skittles|twix|kit ?kat|gum|jerky|slim ?jim|beef sticks?|meat sticks?|granola|protein bars?|clif bars?|sandwich(es)?|burgers?|pizza|tacos?|burritos?|hot ?dogs?|donuts?|doughnuts?|glazers?|muffins?|cookies?|bagels?|breakfast|lunch|dinner|meals?|snacks?|fries|nuggets|bananas?|fruit|trail mix|peanuts|cashews|sunflower seeds|ice|string cheese|yogurt|food)\b/i;
+  // Words that make a line something else, whatever food word is in it:
+  // grass seed, ice melt, a water heater, plant food, wood chips, bone meal,
+  // a pizza oven for an outdoor kitchen, ice-and-water shield...
+  const NOT_FOOD = /\b((grass|lawn|bird|wildflower|vegetable|garden|clover|rye|fescue|bluegrass)\s+seeds?|seed|ice ?melt\w*|melter|services?|utilit(y|ies)|bills?|fees?|barrels?|soda ash|baking soda|monster truck|scraper|chopper|shield|membrane|underlayment|heater|\w*proof\w*|softener|filters?|hose|sprayer|watering|plant|dog food|dog treats?|pet food|cat food|cat litter|fish food|fertili[sz]er|drain\w*|pipe|line|main|valve|meter|timer|feature|based|resist\w*|repell\w*|sealer|deer|weed\w*|pump|tank|wire|paint|trees?|shrubs?|bush(es)?|pop[- ]?ups?|emitters?|rivets?|amazon prime|membership|oven|peel|(?<!roller )grill|smoker|griddle|rotisserie|(wood|stone|limestone|lime|rock|clear|marble|granite|bark|cedar|rubber|mulch|trap|pea|lava|dyed|decorative|colored|playground|red|white|black|brown)\s+chips?|(bone|blood|feather|kelp|gluten|corn|fish)\s+meal)\b/i;
+  const LEARN_PLACES = ['amenity', 'shop', 'office', 'property', 'llc', 'equipment', 'upkeep', 'marketing'];
+  const LEARN_TWICE = 2;
+  // Where the rest of a receipt can go without its lines being divided.
+  const NO_DIVIDING = ['personal', 'travel', 'sub', 'loan', 'aside'];
+  let learnedLines = {};
+  let learnedAt = 0, learnedAsk = null;
+  // Read at most every 2 minutes (what another device learned reaches this
+  // one that soon); a sort by itself waits for it (autoSort), so a line he
+  // said to leave alone is never split off just after launch.
+  function readLearned() {
+    if (Date.now() - learnedAt < 2 * 60 * 1000 || !window.YDDb || !sorts()) return learnedAsk || Promise.resolve();
+    learnedAt = Date.now();
+    learnedAsk = Promise.resolve(window.YDDb.get('settings', LEARN_DOC)).then(d => {
+      if (d && d.lines && typeof d.lines === 'object') learnedLines = Object.assign({}, d.lines, pendingLearned);
+    }).catch(() => { learnedAt = 0; });
+    return learnedAsk;
+  }
+  const pendingLearned = {};
+  // A line's words, without sizes, counts, prices or numbers: "RED BULL
+  // 16OZ 4PK" and "Red Bull 12 oz" are the same thing to learn.
+  function lineKey(name) {
+    return String(name || '').toLowerCase()
+      .replace(/\d+([./]\d+)?\s*(oz|fl|ct|pk|pack|lbs?|ml|l|gal|in|ft|qt|pt|ea|each|count|x)?\b/g, ' ')
+      .replace(/[^a-z& ]+/g, ' ').split(/\s+/).filter(w => w.length > 1).slice(0, 6).join(' ').slice(0, 60);
+  }
+  // Where one line goes by itself, or '' to stay with the receipt.
+  function lineOff(l) {
+    const name = String((l && l.name) || '');
+    const k = learnedLines[lineKey(name)];
+    if (k && k.to === 'keep') return '';
+    if (k && LEARN_PLACES.indexOf(k.to) !== -1 && ((k.to === 'amenity' && k.hand) || (k.n || 0) >= LEARN_TWICE)) return k.to;
+    return FOOD.test(name) && !NOT_FOOD.test(name) ? 'amenity' : '';
+  }
+  // The one place every free line goes by itself, or ''.
+  function allLinesOff(r) {
+    readLearned();
+    const lines = r.lines || [], free = freeLines(r);
+    if (!free.length || r.kind === 'travel') return '';
+    const to = lineOff(lines[free[0]]);
+    return to && free.every(i => lineOff(lines[i]) === to) ? to : '';
+  }
+  // The lines that go elsewhere by themselves, split off before the rest is
+  // filed to `to`. Hands back the receipt with those splits on it (written
+  // with the caller's own write), the words for its toast, and `none` when
+  // nothing is left for `to`.
+  function splitOff(rid, r, to, auto) {
+    const same = { r: r, said: '', none: false };
+    if (NO_DIVIDING.indexOf(to) !== -1 || r.whose === 'personal' || r.kind === 'travel') return same;
+    if (splitting[rid] && ticked[rid] && ticked[rid].size) return same;
+    const lines = r.lines || [], free = freeLines(r);
+    if (!free.length) return same;
+    readLearned();
+    const groups = {};
+    free.forEach(i => {
+      const p = lineOff(lines[i]);
+      if (p && p !== to) (groups[p] = groups[p] || []).push(i);
+    });
+    const places = Object.keys(groups);
+    if (!places.length) return same;
+    const moving = places.reduce((n, p) => n + groups[p].length, 0);
+    const none = moving === free.length;
+    // Nothing would be left for where he picked by hand: his pick stands.
+    if (none && !auto && dest[rid] === to) return same;
+    const all = lines.reduce((s, l) => s + (l.cents || 0), 0);
+    const taxSoFar = (r.splits || []).reduce((s, x) => s + (x.taxCents || 0), 0);
+    let taxGiven = 0;
+    const at = new Date().toISOString(), by = (me() || {}).uid || '';
+    const added = places.map((p, n) => {
+      const idxs = groups[p];
+      const part = idxs.reduce((s, i) => s + (lines[i].cents || 0), 0);
+      // By value; the last share takes the cent left when nothing stays.
+      const tax = none && n === places.length - 1 ? (r.taxCents || 0) - taxSoFar - taxGiven
+        : (all ? Math.round((r.taxCents || 0) * part / all) : 0);
+      taxGiven += tax;
+      return { id: 'sp' + Date.now().toString(36) + uid() + n, to: p, lines: idxs, cents: part, taxCents: tax,
+        at, by, auto: true, byRule: 'lines', name: DEST_NAME[p] };
+    });
+    const said = added.map(s => s.lines.length + (s.to === 'amenity' ? ' food & drink line' : ' line') +
+      (s.lines.length === 1 ? '' : 's') + ' (' + money(s.cents + s.taxCents) + ') → ' + s.name).join(' · ');
+    return { r: Object.assign({}, r, { splits: (r.splits || []).concat(added) }), said, none };
+  }
+  // Every line went elsewhere by itself: the receipt is done with that.
+  function finishSplitOff(rid, r, off, auto) {
+    const patch = moved(receipts[rid] || r, Object.assign({ splits: off.r.splits, status: 'done' }, auto ? { auto } : {}),
+      auto ? BY_ITSELF : null);
+    receipts[rid] = Object.assign({}, off.r, patch);
+    delete ticked[rid]; delete chosen[rid];
+    write(rid, Object.assign({}, patch));
+    showToast('🧾 ' + (r.vendor || 'Receipt') + ': ' + off.said, 5000);
+    redraw(true);
+    return [];
+  }
+  // What he did by hand, kept for next time. `hand`: the lines he ticked
+  // himself (null when he filed the whole receipt).
+  function learnLines(r, idxs, to, hand) {
+    const lines = r.lines || [], put = {};
+    const at = new Date().toISOString(), by = (me() || {}).uid || '';
+    idxs.forEach(i => {
+      const l = lines[i], key = l && lineKey(l.name);
+      if (!key) return;
+      const was = learnedLines[key];
+      let rec = null;
+      if (to === 'amenity') rec = { to: 'amenity', n: was && was.to === 'amenity' ? (was.n || 1) + 1 : 1, hand: !!hand || !!(was && was.to === 'amenity' && was.hand) };
+      else if (hand && LEARN_PLACES.indexOf(to) !== -1) rec = { to, n: was && was.to === to ? (was.n || 1) + 1 : 1 };
+      else if (hand && lineOff(l)) rec = { to: 'keep', n: 1 };
+      if (rec) put[key] = Object.assign(rec, { at, by, name: String(l.name || '').slice(0, 80) });
+    });
+    saveLearned(put, at);
+  }
+  // Lines taken back off Crew amenities with Undo: the ones that went there
+  // by their words or by what it learned are kept with the receipt from
+  // now on (a wrong pick of his own is undone the same way).
+  function unlearnAmenity(r, idxs) {
+    const lines = r.lines || [], put = {};
+    const at = new Date().toISOString(), by = (me() || {}).uid || '';
+    idxs.forEach(i => {
+      const l = lines[i], key = l && lineKey(l.name);
+      if (key && lineOff(l) === 'amenity') put[key] = { to: 'keep', n: 1, at, by, name: String(l.name || '').slice(0, 80) };
+    });
+    saveLearned(put, at);
+  }
+  function saveLearned(put, at) {
+    if (!Object.keys(put).length) return;
+    Object.assign(learnedLines, put); Object.assign(pendingLearned, put);
+    Promise.resolve(window.YDDb.put('settings', LEARN_DOC, { lines: put, updatedAt: at }))
+      .then(() => { Object.keys(put).forEach(k => { delete pendingLearned[k]; }); })
+      .catch(e => console.warn('[receipts] how a receipt was divided not yet on the server:', (e && e.code) || e));
+  }
+
   // A vehicle, the shop, the office, the property, a subcontractor or
   // Personal: kept on the receipt, nothing changes on a job. The vehicle's
   // own page lists what was sorted to it (equipment.js receiptsHtml).
   // `given`: where a photo was sent in for (autoSort), instead of what is
   // picked on the card; `auto`: what to note on the receipt then.
-  function assignElsewhere(rid, r, to, given, auto) {
+  // `whole`: never divided by its lines (a monthly bill: a water utility's
+  // "Water service" is not a drink).
+  function assignElsewhere(rid, r, to, given, auto, whole) {
     let target = given || null;
     if (target) {
       // Already said.
@@ -464,8 +631,13 @@
     } else {
       target = { name: DEST_NAME[to] };
     }
+    const hand = !auto && splitting[rid] && ticked[rid] && ticked[rid].size ? true : null;
+    const off = whole ? { r: r, said: '', none: false } : splitOff(rid, r, to, auto);
+    r = off.r;
+    if (off.none) return !!finishSplitOff(rid, r, off, auto);
     const p = portion(rid, r);
     if (!p) return false;
+    if (!auto) learnLines(r, p.idxs, to, hand);
     const splits = (r.splits || []).concat([Object.assign({
       id: 'sp' + Date.now().toString(36) + uid(), to: to, lines: p.idxs, cents: p.part, taxCents: p.tax,
       at: new Date().toISOString(), by: (me() || {}).uid || '',
@@ -476,7 +648,7 @@
     delete ticked[rid];
     write(rid, Object.assign({}, patch));
     showToast((auto ? '🧾 ' + (r.vendor || 'Receipt') + ' ' : '') + money(p.part + p.tax) + ' → ' + target.name +
-      (auto ? ' (sent in for it)' : ''));
+      (auto ? ' (sent in for it)' : '') + (off.said ? ' · ' + off.said : ''), off.said ? 5000 : undefined);
     redraw(true);
     return true;
   }
@@ -512,8 +684,13 @@
     return typed.filter(m => days(m.date, date) <= 7 && add.some(a => c(a.price) === c(m.price) && words(a.item).some(w => words(m.item).indexOf(w) !== -1)));
   }
   function addToJob(rid, r, jobId, auto) {
+    const hand = !auto && splitting[rid] && ticked[rid] && ticked[rid].size ? true : null;
+    const off = splitOff(rid, r, 'job', auto);
+    r = off.r;
+    if (off.none) return finishSplitOff(rid, r, off, auto);
     const p = portion(rid, r);
     if (!p) return null;
+    if (!auto) learnLines(r, p.idxs, 'job', hand);
     const { idxs, lines, part, tax, last } = p;
 
     const sid = 'sp' + Date.now().toString(36) + uid();
@@ -575,7 +752,8 @@
       splits[splits.length - 1].jobName + (auto ? ' — ' + (auto.said || 'sent in for it') : '') +
       (ticks ? ' · ' + ticks + ' ticked on Materials to Order' : '') +
       (typedOff.length ? ' · the typed line it repeats came off' : '') +
-      (newWords ? ' · ' + newWords : ''), auto || newWords ? 5000 : undefined);
+      (off.said ? ' · ' + off.said : '') +
+      (newWords ? ' · ' + newWords : ''), auto || newWords || off.said ? 5000 : undefined);
     redraw(true);
     // After the toast has had its moment (its own words would replace it):
     // any price that is not the price list's, to Supplies → Prices to check.
@@ -623,6 +801,7 @@
     if (f.to === 'job' && !readJobBlob(f.jobId)) return;
     if (navigator.onLine === false) return;
     autoBusy[rid] = autoStamp(r);
+    try { await readLearned(); } catch (e) { /* the words alone, then */ }
     const uidNow = (me() || {}).uid || '', at = new Date().toISOString();
     let claimed = false;
     try {
@@ -775,6 +954,9 @@
     const splits = (r.splits || []).filter(x => x.id !== sid);
     const status = r.status === 'skipped' ? 'skipped' : 'new';
     const patch = moved(r, { splits, status });
+    // Food and drinks taken back off Crew amenities: not food, from now on
+    // (learnLines). Its lines are free again, to tick onto the job.
+    if (destOf(s) === 'amenity') unlearnAmenity(r, s.lines || []);
     // Said on the stamp: a later email about it must not file it again
     // (receipts.py _put_back_by_hand). Stamped even when its status stays as
     // it was: the last of a part-sorted receipt coming off.
@@ -1128,7 +1310,7 @@
     const put = r.statusChange || {};
     if (!to || (put.to === 'new' && put.by && (put.handBack || !r.paidOn))) return false;
     delete ticked[rid];             // always the whole receipt
-    return assignElsewhere(rid, r, to, { name: DEST_NAME[to] });
+    return assignElsewhere(rid, r, to, { name: DEST_NAME[to] }, null, true);
   }
   // What fileByBill just put on these, for undoPay.
   const splitsOf = ids => ids.reduce((o, id) => { o[id] = receipts[id].splits[0].id; return o; }, {});

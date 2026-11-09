@@ -219,13 +219,17 @@ service cloud.firestore {
         // Storm watch (functions/stormwatch.py): the snow coming and the
         // accounts in play, on Home for everyone who works here. Written by
         // the server alone.
-        || (docId == 'stormWatch' && isStaff());
+        || (docId == 'stormWatch' && isStaff())
+        // How Jonah divides a receipt's lines (receipts.js learnLines): whoever
+        // sorts receipts reads it, so their phone divides the same way.
+        || (docId == 'receiptLearn' && canChange('jobs'));
       allow write: if isOwner()
         // What was marked Not a receipt (receipts.js rcNotReceipt), for the
         // email reader to learn from: whoever sorts receipts adds a mark or
-        // takes their receipt off one -- that map and nothing else.
+        // takes their receipt off one; and how a receipt's lines are divided
+        // (learnLines: `lines`) -- those maps and nothing else.
         || (docId == 'receiptLearn' && canChange('jobs') && request.resource != null
-            && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys().hasOnly(['patterns', 'updatedAt'])
+            && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys().hasOnly(['patterns', 'lines', 'updatedAt'])
             && request.resource.data.patterns is map)
         || (docId == 'snow' && canChange('snow'))
         || (docId in ['invoicing', 'quickbooksMap', 'invoiceReminders'] && canChange('billing'))
