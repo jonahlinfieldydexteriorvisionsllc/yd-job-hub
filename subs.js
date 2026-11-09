@@ -335,6 +335,98 @@
     };
   }
 
+  // A subcontractor who does a line of a job -- the installer on its
+  // landscape lighting (an estimate work line `sub`, estimate.js) -- bills for
+  // that job, so the bill goes on the job, where it counts under the job's
+  // Subcontractors cost (jobcosts.js reads a receipt of kind subcontractor so),
+  // not here among the mowing properties, which no job's costs ever see.
+  // Jonah, 9 Nov 2026, of the lighting installer's deposit: "it didnt pull the
+  // receipt" -- it had come in and been filed to the installer, so the job he
+  // looked on never showed it. The jobs going (booked, under way, finished or
+  // invoiced, not lost, paid or taken off) whose estimate has a line done by
+  // them: by their id on the line, or by the name typed on it when that name
+  // is theirs and no other subcontractor's ("Glow Night" on a line is "Glow
+  // Night Lighting"; a sub named "Green Lawn" is not a line typed "Green Lawn
+  // Mowing & Snow", someone else's).
+  const WORKING = ['booked', 'inprogress', 'finished', 'invoiced'];
+  function jobsDoneBy(s) {
+    if (!s || typeof loadAllJobs !== 'function' || typeof jobStage !== 'function') return [];
+    const namesOf = x => [words(x.name || ''), words(x.match || '')].filter(w => w.length);
+    const mine = namesOf(s), others = subsList().filter(x => x.id !== s.id).map(namesOf);
+    const theirs = sub => {
+      if (sub.subId) return sub.subId === s.id;
+      const by = words(sub.by || '');
+      return !!by.length && mine.some(n => nameIn(by, n)) && !others.some(ns => ns.some(n => nameIn(by, n)));
+    };
+    return loadAllJobs().filter(d => d && d._id && !d.deletedAt && !d.removeWhy &&
+        WORKING.indexOf(jobStage(d).id) !== -1 &&
+        ((d.estimate || {}).work || []).some(w => w && w.sub && theirs(w.sub)))
+      .map(d => ({ id: d._id, name: (d.customerName || '').trim() || 'Untitled job' }));
+  }
+  // The job a bill of theirs goes on: the only one going they do a line of,
+  // or -- on lines of several -- the one the email reader matched by address.
+  // '' when it can't be told: a person picks, in Receipts to sort. Never
+  // against the reader: a bill it matched to another job is left for a person.
+  function jobForBill(r, s, list) {
+    list = list || jobsDoneBy(s);
+    const sug = r && r.suggest && r.suggest.jobId;
+    if (sug) return list.some(j => j.id === sug) ? sug : '';
+    return list.length === 1 ? list[0].id : '';
+  }
+  // Which of their receipts are the job's: only money paid (a payment, a
+  // deposit). Their invoice stays here, as before, where it is owed and
+  // marked paid, and its payment then goes on the job -- both on the job
+  // would count the cost twice.
+  const paidOut = r => PAY_DOCS.indexOf(r && r.docType) !== -1;
+  // The jobs a receipt of theirs is for ([] when it isn't a job's).
+  const jobsOfBill = (r, s) => (s && paidOut(r) ? jobsDoneBy(s) : []);
+  // Whether it puts itself on the job, or waits in To sort with the job
+  // picked for a tap: not from a subcontractor with client properties here
+  // (they bill for those too, and a payment can't say which), and not one the
+  // reader thought was a personal purchase.
+  const fileItself = (r, s) => r.whose !== 'personal' && !live(s.props).length;
+  const claiming = {};       // receipt id -> this device is putting it on its job
+  // On the job, by Receipts' own road (its lines and tax onto the job's costs;
+  // Undo there takes them off) -- once, whichever of his devices sees it
+  // first: claimed in one step on the server, as a photo sent in for a job is
+  // (receipts.js autoSort), or two open devices would each add the lines.
+  async function fileOnItsJob(id, jobId, s) {
+    if (claiming[id]) return;
+    claiming[id] = true;
+    const by = ((window.YDAuth && YDAuth.user) || {}).uid || '', at = new Date().toISOString();
+    const free = d => !!d && window.YDStages.receipt(d).id === 'tosort' && !(d.splits || []).length &&
+      !(d.auto && d.auto.state === 'adding' && Date.now() - new Date(d.auto.at || 0).getTime() < 10 * 60 * 1000);
+    let claimed = false;
+    try {
+      await window.YDDb.transact([['receipts', id]], ([d]) => {
+        claimed = free(d);
+        return [claimed ? { auto: { state: 'adding', by: by, at: at } } : null];
+      });
+    } catch (e) {
+      delete claiming[id];       // no signal: the next look tries again
+      return;
+    }
+    if (!claimed) {
+      // Another device has it: its work, unless it goes quiet -- then a later
+      // look here may take it once the claim is stale.
+      delete claiming[id];
+      return;
+    }
+    const put = YDReceipts.fileOnJob(id, jobId, { state: 'done', why: '', by: by, at: new Date().toISOString(),
+      said: (s.name || 'the subcontractor') + ' does a line of it' });
+    if (put) {
+      applyLocal({ filed: { [id]: true } });
+      save({ filed: { [id]: true } }, 'noting a filed bill');
+    } else {
+      // Not added after all (the job couldn't be changed): the claim comes
+      // off, so a person can put it on, and this device doesn't try again
+      // until the app is opened again -- `claiming` stays, or the write below
+      // would bring it straight back here, again and again.
+      Promise.resolve(window.YDDb.put('receipts', id, { auto: null }))
+        .catch(e => console.warn('[subs] claim not taken off:', (e && e.code) || e));
+    }
+  }
+
   // Their bills leave "Receipts to sort" by themselves -- only on the
   // owner's device, and only once both lists have come from the server.
   // Only what the reader called a subcontractor's bill: a subcontractor who
@@ -348,12 +440,27 @@
   // (stages.js), so All receipts does not name whoever's device it was.
   function fileBills() {
     if (!owner() || !fresh || !window.YDReceipts || !YDReceipts.loaded || !YDReceipts.loaded() || !window.YDDb) return;
+    // The jobs, to tell a bill for a job's line from a mowing bill: until
+    // they are on this device every bill would read as a mowing one.
+    if (typeof getJobIndex !== 'function' || !getJobIndex().length) return;
     const all = receiptsAll(), filed = data.filed || {}, now = {};
     const at = new Date().toISOString(), by = ((window.YDAuth && YDAuth.user) || {}).uid || '';
     Object.keys(all).forEach((id, n) => {
       const r = all[id];
       const s = window.YDStages.receipt(r).id === 'tosort' && !(r.splits || []).length && !filed[id] && r.kind === 'subcontractor' ? subFor(r) : null;
       if (!s) return;
+      // A payment to one doing a line of a job: on that job (fileOnItsJob),
+      // or, when it can't put itself there, left in To sort with that job
+      // picked (receipts.js defaultDest) -- never to Subcontractors, where the
+      // job's costs would never see it. The job not on this device yet: next
+      // look. Their invoices go on below, to them, as before.
+      const jobs = jobsOfBill(r, s);
+      if (jobs.length) {
+        const jobId = jobForBill(r, s, jobs);
+        if (jobId && fileItself(r, s) && typeof readJobBlob === 'function' && readJobBlob(jobId) &&
+            YDReceipts.fileOnJob && window.YDDb.transact) fileOnItsJob(id, jobId, s);
+        return;
+      }
       const lines = r.lines || [];
       const lineCents = lines.reduce((t, l) => t + (l.cents || 0), 0);
       const split = { id: 'sp' + Date.now().toString(36) + n.toString(36) + Math.random().toString(36).slice(2, 5),
@@ -2029,6 +2136,11 @@
   // list: the subcontractors set up here, for Receipts' Subcontractor picker
   // (empty for anyone but the owner, who alone reads them).
   window.YDSubs = { render: render, data: () => data, subFor: r => subFor(r), subOf: r => subOf(r),
+    // A payment to a subcontractor doing a line of a job (jobsOfBill): the
+    // jobs going they do lines of, and the one it goes on ('' when it can't be
+    // told); [] and '' for their invoices and anyone else's receipts.
+    jobsFor: r => { const w = r && subOf(r), s = w && subById(w.id); return jobsOfBill(r, s); },
+    jobFor: r => { const w = r && subOf(r), s = w && subById(w.id), l = jobsOfBill(r, s); return l.length ? jobForBill(r, s, l) : ''; },
     list: () => subsList().map(s => ({ id: s.id, name: s.name || '' })), forJob: forJob,
     toMatch: toMatch, clientOf: clientOf, billClient: billClient,
     // Every bill of one subcontractor, each once, with its client and how

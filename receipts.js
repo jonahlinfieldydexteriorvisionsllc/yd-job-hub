@@ -171,14 +171,25 @@
   // words in the store's name). Only the owner has the list.
   const subMatch = r => (window.YDSubs && YDSubs.subFor ? YDSubs.subFor(r) : null);
   const subsKnown = () => (window.YDSubs && YDSubs.list ? YDSubs.list() : []);
+  // A subcontractor doing a line of a job bills for that job (subs.js
+  // jobsDoneBy): the jobs going they do lines of, and the one it goes on.
+  // Only for what would otherwise be their bill: materials they sell go by
+  // the usual rules.
+  const subsBill = r => r.kind === 'subcontractor' ||
+    (r.kind !== 'materials' && r.kind !== 'plants' && r.kind !== 'loan_payment' && !!subMatch(r));
+  const subJobs = r => (subsBill(r) && window.YDSubs && YDSubs.jobsFor ? YDSubs.jobsFor(r) : []);
+  const subJob = r => (subsBill(r) && window.YDSubs && YDSubs.jobFor ? YDSubs.jobFor(r) : '');
+  // The job a card starts on: the one picked, else the one the reader
+  // matched, else the job a subcontractor's line is on.
+  const startJob = (rid, r) => chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || subJob(r) || '');
   function defaultDest(r) {
-    if (r.kind === 'subcontractor') return 'sub';
     // A bill from one of his subcontractors is theirs (Jonah, 29 Oct 2026:
     // their receipts "should auto go to subcontractor"), whoever
-    // Claude thought it was for and whatever job's address it names. A
+    // Claude thought it was for and whatever job's address it names -- unless
+    // they do a line of a job, when it is that job's (9 Nov 2026). A
     // subcontractor that also sells materials keeps those for the jobs
     // (receipts.py SUB_GOODS).
-    if (r.kind !== 'materials' && r.kind !== 'plants' && r.kind !== 'loan_payment' && subMatch(r)) return 'sub';
+    if (subsBill(r)) return subJobs(r).length ? 'job' : 'sub';
     // A flight, a hotel or a bus ticket is Travel whoever the trip was for
     // (Jonah, 30 Oct 2026: "all receipts from airlines or for hotel bookings
     // or bus tickets should be automarked as travel"; receipts.py is_travel)
@@ -477,7 +488,7 @@
     const to = dest[rid] || defaultDest(r);
     if (to === 'aside') { setAside(rid, r); return; }
     if (to !== 'job') { assignElsewhere(rid, r, to); return; }
-    const jobId = chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || '');
+    const jobId = startJob(rid, r);
     if (!jobId) { showToast('Pick the job first'); return; }
     addToJob(rid, r, jobId, null);
   };
@@ -561,7 +572,7 @@
     write(rid, Object.assign({}, patch));
     showToast((auto ? '🧾 ' + (r.vendor || 'Receipt') + ': ' : '') +
       add.length + ' line' + (add.length === 1 ? '' : 's') + ' (' + money(part + tax) + ') added to ' +
-      splits[splits.length - 1].jobName + (auto ? ' — sent in for it' : '') +
+      splits[splits.length - 1].jobName + (auto ? ' — ' + (auto.said || 'sent in for it') : '') +
       (ticks ? ' · ' + ticks + ' ticked on Materials to Order' : '') +
       (typedOff.length ? ' · the typed line it repeats came off' : '') +
       (newWords ? ' · ' + newWords : ''), auto || newWords ? 5000 : undefined);
@@ -1673,7 +1684,7 @@
     const at = splitOf(r);
     const free = freeLines(r);
     const tickedSet = new Set(tickedLines(rid, r));
-    const pick = chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || '');
+    const pick = startJob(rid, r);
     const sug = r.suggest && jobs.find(j => j.id === r.suggest.jobId);
     const owed = owedOf(r);
     const split = isSplit(rid, r);
@@ -2416,7 +2427,14 @@
     needsYou: needsYou,
     // doubles.js: a job's costs changed, and a receipt waiting to sort put on it.
     changeJob: changeJob,
-    fileOnJob: (rid, jobId) => (receipts[rid] ? addToJob(rid, receipts[rid], jobId) : null),
+    // subs.js: a subcontractor's bill for a job's line, put on it by itself
+    // (`auto`, with `said`: why, for the toast) -- the whole of it, whatever
+    // lines are ticked on this screen, as a photo sent in for a job goes.
+    fileOnJob: (rid, jobId, auto) => {
+      if (!receipts[rid]) return null;
+      if (auto) { delete ticked[rid]; delete splitting[rid]; }
+      return addToJob(rid, receipts[rid], jobId, auto || null);
+    },
     // Bills not paid yet (Invoices to pay), for Home.
     toPay: () => allReceipts().filter(toPayNow),
     // A receipt's tags by name, for the app's search (search.js).
