@@ -1563,11 +1563,18 @@ def _site(request, path):
     if pitch:
         # Someone selling something (Jonah, 9 Nov 2026: "ive already gotten two
         # spam leads"): no lead, card, buzz or reply, only his inbox marked spam.
-        # Answered like the hidden box: a seller learns nothing, and a real
-        # person caught by mistake is told if it didn't reach him.
-        if wl.just_email(_db, form, wl.pitch_why(pitch), " (spam)", robot=True):
-            return (ok, 200, json_headers)
-        return (json.dumps({"error": "too many"}), 429, json_headers)
+        # The words only flag it; Claude has to say it's clearly a pitch, and
+        # anything less is a lead ("make sure that this doesnt prevent actual
+        # customers"). Answered like the hidden box: a seller learns nothing,
+        # and a real person caught by mistake is told if it didn't reach him.
+        import leads
+        day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        judged, why = wl.selling(_claude, form, pitch, lambda usage: _record_spend(day, "leads", usage, leads.MODEL))
+        print("website form: flagged as a pitch (%s); Claude: %s, %s" % ("; ".join(pitch), judged, why))
+        if judged is True:
+            if wl.just_email(_db, form, wl.pitch_why(pitch, why), " (spam)", robot=True):
+                return (ok, 200, json_headers)
+            return (json.dumps({"error": "too many"}), 429, json_headers)
     # Every way a form can't go in below still tries his inbox first, and the
     # visitor only sees the failure, with the phone number, if that fails too.
     done, failed = None, None
