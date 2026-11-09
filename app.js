@@ -1120,7 +1120,7 @@ function switchTab(name) {
 // so does a post held or not gone up (functions/social.py). One ready for
 // Nextdoor opens Home at its card.
 const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports',
-  deadlines: 'openDeadlines', posts: 'openPosts', nextdoor: 'homeNextdoor', changeorders: 'openChangeOrders', paysheet: 'openPaySheet', invoices: 'openInvoices' };
+  deadlines: 'openDeadlines', posts: 'openPosts', nextdoor: 'homeNextdoor', changeorders: 'openChangeOrders', paysheet: 'openPaySheet', invoices: 'openInvoices', pins: 'openPins' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }

@@ -2467,6 +2467,68 @@
       esc(m.url) + '" target="_blank" rel="noopener">' + mailWords(m) + '</a>').join('') + '</div>' : '';
   }
   const notesWords = k => String((k && k.notes) || '').split('\n').filter(l => !MAIL_LINE.test(l)).join('\n').trim();
+  // An address no map knows (functions/pins.py makes the card, pinFor on it):
+  // place the pin from the card, or send it to the night run (Jonah, 9 Nov
+  // 2026: "a notification to place a pin ... or to have you do it").
+  function pinButtonsHtml(board, k) {
+    if (!k || !k.pinFor || k.doneAt || !window.YDPin) return '';
+    const ids = '\'' + safeId(board.id) + '\', \'' + safeId(k.id) + '\'';
+    return '<div class="bd-mail">' +
+      '<button type="button" class="btn btn-sm btn-filled" onclick="bdPinPlace(' + ids + ')">📍 Place the pin</button>' +
+      (board.id === WISHES ? '<span class="muted">🤖 With Claude — ' + claudeNight(k.sentToClaudeAt) + '</span>'
+        : isOwner() && boards[WISHES] ? '<button type="button" class="btn btn-sm" onclick="bdPinClaude(' + ids + ')">🤖 Have Claude do it</button>' : '') +
+      '</div>';
+  }
+  // When the night run (midnight, Tuesday to Saturday) next gets to a card
+  // sent at `at`: "tonight", or "Monday night" from a Friday-night run's
+  // morning until Monday evening. functions/pins.py hands a card back to his
+  // to-dos at 7 the morning after.
+  function claudeNight(at) {
+    const t = at ? new Date(at) : new Date();
+    const day = t.getDay();         // the phone's own day: Job Hub is used around Madison
+    return day === 6 || day === 0 ? 'Monday night' : 'tonight';
+  }
+  window.bdPinPlace = function (boardId, cardId) {
+    const k = (cards[boardId] || {})[cardId];
+    if (!k || !k.pinFor) return;
+    if (openCard) window.closeBoardModal();
+    window.YDPin.open(Object.assign({}, k.pinFor));
+  };
+  window.bdPinClaude = function (boardId, cardId) {
+    if (openCard) window.closeBoardModal();
+    sendToClaude(boardId, cardId);
+  };
+  // What the night run does, on the card itself, kept to one paragraph: it
+  // reads the card, and so does he.
+  function pinSteps(p) {
+    return 'For Claude: find "' + p.address + '" on Google Maps (its place page holds the pin as !3d…!4d…), then in Job Hub ' +
+      'YDClaude.post(\'/geo/pin\', {kind: \'' + p.kind + '\', id: \'' + p.id + '\', lat, lng, by: \'claude\'}). That closes ' +
+      'this card and tells Jonah. Not found there either: write why here and leave it; it goes back to him in the morning.';
+  }
+  // To the wish board's Overnight column, the night run's first stop, with
+  // what to do written on it. Undo puts it back on his to-dos.
+  function sendToClaude(boardId, cardId) {
+    const from = boards[boardId], to = boards[WISHES], k = from && (cards[from.id] || {})[cardId];
+    if (!k || !to || !k.pinFor) { showToast('The wish board is still loading — try again in a moment'); return; }
+    const was = Object.assign({}, k);
+    delete was.id;
+    const cols = to.columns || [];
+    const col = (cols.find(c => /overnight/i.test(c.name || '')) || cols[0] || {}).id;
+    if (!col) return;
+    const rec = Object.assign({}, was, { column: col, order: startOrder(to.id, col),
+      labels: (was.labels || []).filter(l => (to.labels || []).some(x => x.id === l)),
+      notes: String(was.notes || '') + '\n\n' + pinSteps(k.pinFor), noClaude: false, sentToClaudeAt: nowIso(),
+      doneAt: null, updatedAt: nowIso(), updatedBy: myName() });
+    cardAcross(from, to, cardId, rec, was);
+    showUndo('Sent to Claude for ' + claudeNight(), () => cardAcross(to, from, cardId, was, rec), 9000);
+  }
+  function pinCards() {
+    const out = [];
+    [TODO_BOARD, WISHES].forEach(bid => Object.values(cards[bid] || {}).forEach(k => {
+      if (k && k.id && k.pinFor && !k.doneAt) out.push({ boardId: bid, cardId: k.id, pinFor: k.pinFor });
+    }));
+    return out;
+  }
   function renderCardDetail() {
     const board = boards[openCard.boardId];
     const k = board && (cards[board.id] || {})[openCard.cardId];
@@ -2509,6 +2571,7 @@
       '</div>' +
       pickupHtml(k) +
       mailButtonsHtml(k) +
+      pinButtonsHtml(board, k) +
       (notesWords(k) ? '<div class="bd-notes">' + esc(notesWords(k)) + '</div>' : '') +
       (list.length ? '<div class="bd-move-label">Checklist</div><div class="bd-checklist">' +
         list.map(i => '<label class="chk bd-chk"><input type="checkbox"' + (i.done ? ' checked' : '') +
@@ -4385,6 +4448,14 @@
       } finally { whoNow = null; }
     },
     editsBoard: id => !!boards[id] && editsBoard(boards[id]),
+    // Addresses waiting for a map pin (pinplace.js, home.js): the open pin
+    // cards on his to-dos and the wish board, and sending one to Claude.
+    pinCards: pinCards,
+    pinButtons: (boardId, cardId) => {
+      const b = boards[boardId], k = b && (cards[b.id] || {})[cardId];
+      return b && k ? pinButtonsHtml(b, k) : '';
+    },
+    sendToClaude: sendToClaude,
     // The board in front of whoever is on the Boards tab (the sidebar's Bids).
     currentId: () => current,
     // The email a to-do on Home is about (mailOf), the reply first: a tap

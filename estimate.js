@@ -198,6 +198,8 @@
   // ------------------------------------------------------- the job's record
 
   window.YDEstimate = {
+    // A job's miles looked up again once its map pin is placed by hand.
+    retrip: id => retrip(id),
     get() {
       const o = clone(est);
       o.chat = o.chat.slice(-CHAT_KEEP);
@@ -2409,8 +2411,11 @@
     const fp = P().fuelPrices() || {};
     const hasAddr = !!(el('address') && el('address').value.trim());
     const missed = !tripping && tripMissed[currentJobId] && tripMissed[currentJobId] === siteKey();
+    const approx = !tripping && !missed && tripApprox[currentJobId] && tripApprox[currentJobId] === siteKey();
+    const pinBtn = !ro && window.YDPin ? ' <button type="button" class="link-btn" onclick="estPlacePin()">📍 Place the pin</button>' : '';
     const milesNote = tripping ? 'Looking up the miles…'
-      : missed ? 'Couldn’t find this address on the map — type the miles. <button type="button" class="link-btn" onclick="estFindMiles(true)">Try again</button>'
+      : missed ? 'Couldn’t find this address on the map — type the miles. <button type="button" class="link-btn" onclick="estFindMiles(true)">Try again</button>' + pinBtn
+      : approx ? 'No map knows this street, so these miles are to the middle of town.' + pinBtn
       : !hasAddr ? 'Add the job’s address and the miles fill in by themselves.'
       : num(fu.miles) === null ? ''
       : (fu.milesAt ? 'by road from your shop · ' : '') + 'there and back each day';
@@ -5215,6 +5220,11 @@
   // An automatic lookup that found no miles says so beside the box, rather
   // than leaving it empty with no word why. job id -> the address it was for.
   const tripMissed = {};
+  // Miles measured to the middle of the town, because no map knows the
+  // street: said beside the box, with the pin window a tap away. And a pin
+  // just placed: the miles looked up again replace looked-up ones (never
+  // typed ones). job id -> the address.
+  const tripApprox = {}, repinned = {};
   // Someone typing in the estimate: an answer arriving redraws only the
   // numbers, not the box under their fingers (and the iPad's keyboard).
   const typingHere = () => {
@@ -5231,6 +5241,9 @@
     const jobId = currentJobId, key = siteKey();
     trippedFor[jobId] = key;
     delete tripMissed[jobId];
+    delete tripApprox[jobId];
+    const repin = repinned[jobId] === key;
+    delete repinned[jobId];
     tripping = true; renderTotals();
     try {
       const r = await window.YDClaude.post('/estimate/trip', {
@@ -5250,9 +5263,10 @@
         // Miles typed by hand stay; an empty box is filled, and miles looked
         // up for the address before it changed are replaced (milesAt).
         const was = est.fuel || {};
-        if (asked || num(was.miles) === null || (was.milesAt && was.milesAt !== key)) {
+        if (asked || num(was.miles) === null || (was.milesAt && (was.milesAt !== key || repin))) {
           est.fuel = Object.assign({}, est.fuel, { miles: Math.round(num(r.miles) * 10) / 10, milesAt: key });
         }
+        if (r.approx) tripApprox[jobId] = key;
         changed(asked || !typingHere());
         // Found by itself: kept straight away, as Claude's answers are (land),
         // so opening another job a moment later does not lose them.
@@ -5270,6 +5284,56 @@
       tripping = false; renderTotals();
     }
   };
+
+  // The pin window for the open job (pinplace.js): its address, its point if
+  // it has one. Saving there looks the miles up again (retrip).
+  window.estPlacePin = function () {
+    if (!currentJobId || !window.YDPin) return;
+    const v = id => ((el(id) || {}).value || '').trim();
+    const street = v('address'), city = v('city'), zip = v('zip');
+    const s = est.site && est.site.at === siteKey() ? est.site : null;
+    window.YDPin.open({ kind: 'job', id: currentJobId, name: v('customerName') || 'This job',
+      address: [street, city, ['WI', zip].filter(Boolean).join(' ')].filter(Boolean).join(', '),
+      street: street, city: city, zip: zip, lat: s ? s.lat : null, lng: s ? s.lng : null });
+  };
+  // After a pin is placed for a job (pinplace.js): its miles and map point
+  // looked up again from the pin. Miles typed by hand stay his; looked-up
+  // ones are replaced. The open job on the screen; any other through patchJob,
+  // as the automatic lookups do.
+  // An estimate the customer said yes to in Job Hub is left alone, as the
+  // automatic lookups leave it (tripWanted, tripNeed): new miles would move
+  // its agreed price. The pin is still kept for the next one.
+  async function retrip(jobId) {
+    if (!jobId || !window.YDClaude || !P()) return;
+    if (jobId === currentJobId) {
+      if (settled() && !P().asAccepted(est)) return;
+      delete trippedFor[jobId];
+      repinned[jobId] = siteKey();
+      return window.estFindMiles(false);
+    }
+    let d = null;
+    try { d = JSON.parse(readJobBlob(jobId) || 'null'); } catch (err) {}
+    if (!d || !d.estimate || !String(d.address || '').trim()) return;
+    if (!P().asAccepted(d.estimate) && settledJob(d)) return;
+    const key = siteKeyOf(d);
+    let r = null;
+    try {
+      r = await window.YDClaude.post('/estimate/trip', { jobId: jobId, address: String(d.address).trim(),
+        city: String(d.city || '').trim(), state: String(d.state || '').trim(), zip: String(d.zip || '').trim() });
+    } catch (err) { return; }
+    let now = null;
+    try { now = JSON.parse(readJobBlob(jobId) || 'null'); } catch (err) {}
+    if (!now || !now.estimate || jobId === currentJobId || siteKeyOf(now) !== key) return;
+    const e = clone(now.estimate);
+    if (r && Array.isArray(r.point) && typeof r.point[0] === 'number' && typeof r.point[1] === 'number') {
+      e.site = { lat: r.point[0], lng: r.point[1], at: key, zip: null, zipOk: e.site && e.site.at === key ? e.site.zipOk || null : null };
+    }
+    const fu = e.fuel || {};
+    if (r && num(r.miles) !== null && (num(fu.miles) === null || fu.milesAt)) {
+      e.fuel = Object.assign({}, fu, { miles: Math.round(num(r.miles) * 10) / 10, milesAt: key });
+    }
+    window.YDSync.patchJob(jobId, { estimate: e });
+  }
 
   // ------------------------------------------------------- QuickBooks
 

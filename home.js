@@ -166,7 +166,13 @@
       (x.canTick ? '<input type="checkbox"' + (x.done ? ' checked' : '') + ' onchange="homeTick(\'' + k + '\', this.checked)" ' +
         'aria-label="Done">' : '<span class="cal-todo-dot"></span>') +
       '<button class="cal-todo-t" onclick="homeOpen(\'' + k + '\')">' + esc(x.title) +
-        (line ? '<small>' + line + '</small>' : '') + '</button></div>' + mailLine(x) + (x.task ? claudeLine(x, k) : '');
+        (line ? '<small>' + line + '</small>' : '') + '</button></div>' + mailLine(x) + pinLine(x) + (x.task ? claudeLine(x, k) : '');
+  }
+  // A to-do to place a map pin (functions/pins.py): the map, or Claude, a tap.
+  function pinLine(x) {
+    const o = x && x.o;
+    const html = o && o.auto === 'card' && window.YDBoards && YDBoards.pinButtons ? YDBoards.pinButtons(o.boardId, o.id) : '';
+    return html ? '<div class="hm-cl">' + html + '</div>' : '';
   }
   // A to-do about an email (a lead to answer): straight there, a tap.
   function mailLine(x) {

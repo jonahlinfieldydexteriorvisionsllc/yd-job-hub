@@ -7,7 +7,7 @@
 //
 // Bump CACHE whenever a shell file changes, or phones keep serving the old one.
 
-const CACHE = 'ydjobhub-v497';
+const CACHE = 'ydjobhub-v498';
 
 // Same-origin files the app cannot start without.
 const SHELL = [
@@ -39,6 +39,7 @@ const SHELL = [
   './quickbooks.js',
   './equipment.js',
   './remind.js',
+  './pinplace.js',
   './recurring.js',
   './boards.js',
   './calendar.js',
@@ -133,6 +134,10 @@ const BYPASS = [
   // only. Saved like the app's own files, every half-typed street would be
   // kept, and an old answer served back at once.
   'photon.komoot.io',
+  // Map pictures in the pin window (pinplace.js): every square looked at
+  // would otherwise be kept for good.
+  'tile.openstreetmap.org',
+  'server.arcgisonline.com',
 ];
 
 // When the page itself last came from the saved copy because the network was

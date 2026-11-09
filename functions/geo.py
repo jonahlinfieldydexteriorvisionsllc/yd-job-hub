@@ -60,6 +60,116 @@ def _census(street, city, state, zip_):
             "zip": c.get("zip") or zip_ or None, "source": "census"}
 
 
+# Dane County's own address points: every address the county or a city in it
+# has assigned, from the day it is assigned -- months or years before a new
+# street reaches the Census or OpenStreetMap (9 Nov 2026: a Fitchburg
+# street neither knew had been on the county's list since Nov 2024). Public,
+# no key. Asked after the Census and before OpenStreetMap; it knows only
+# Dane County, so anywhere else simply finds nothing here.
+DANE_URL = "https://dcimapapps.countyofdane.com/arcgissrv/rest/services/Addressing/MapServer/0/query"
+DIRECTIONS = {"n": "N", "north": "N", "s": "S", "south": "S", "e": "E", "east": "E", "w": "W", "west": "W",
+              "ne": "NE", "northeast": "NE", "nw": "NW", "northwest": "NW", "se": "SE", "southeast": "SE",
+              "sw": "SW", "southwest": "SW"}
+# A street type as people write it, to the county's word ("Tr" is "Trail").
+# Beyond STREET_TYPES, the ones the county uses that the map spelling skips.
+TYPE_WORDS = {v.lower(): v for v in STREET_TYPES.values()}
+TYPE_WORDS.update(STREET_TYPES)
+TYPE_WORDS.update({"way": "Way", "run": "Run", "pass": "Pass", "xing": "Crossing", "crossing": "Crossing",
+                   "loop": "Loop", "row": "Row", "sq": "Square", "square": "Square", "path": "Path",
+                   "walk": "Walk", "trce": "Trace", "trace": "Trace", "aly": "Alley", "alley": "Alley",
+                   "bnd": "Bend", "bend": "Bend", "hl": "Hill", "hill": "Hill", "hts": "Heights",
+                   "heights": "Heights", "rdg": "Ridge", "ridge": "Ridge"})
+
+
+def _dane_parts(street):
+    """'N1234 Elm Cir', '100 N Main St', '2901-21 Oak Tr', '12 Main St Apt 3' ->
+    the ways to read it, each {prefix, num, pre, words}; [] when it has no
+    house number. `words` is what is left of the street name, lower case,
+    its type as typed. "5 North St" reads two ways: North may be the name."""
+    s = re.sub(r"\s*(#|\b(apt|unit|ste|suite|lot|bldg)\b\.?).*$", "", str(street or ""), flags=re.I).strip(" ,")
+    m = re.match(r"^([NSEW])?\s?(\d+)(?:-\d+)?[A-Za-z]?\s+(.+)$", s, re.I)
+    if not m:
+        return []
+    rest = [w.strip(".,").lower() for w in m.group(3).split() if w.strip(".,")]
+    if not rest:
+        return []
+    one = {"prefix": (m.group(1) or "").upper(), "num": int(m.group(2)), "pre": "", "words": rest}
+    if len(rest) > 1 and rest[0] in DIRECTIONS:
+        return [dict(one, pre=DIRECTIONS[rest[0]], words=rest[1:]), one]
+    return [one]
+
+
+def _dane_fits(a, p):
+    """The county's record is the street asked: the same name, and the type and
+    direction when the address gave them."""
+    base = [w.lower() for w in str(a.get("BaseName") or "").replace(".", "").split()]
+    words = list(p["words"])
+    if words[:len(base)] != base or not base:
+        return False
+    left = words[len(base):]            # what follows the name: its type, a direction after it
+    typ = {str(a.get("PostType") or "").lower(), str(a.get("abvPostType") or "").lower()} - {""}
+    post = {str(a.get("PostDirectional") or "").lower(), str(a.get("abvPostDirectional") or "").lower()} - {""}
+    for w in left:
+        if w in typ or (w in TYPE_WORDS and TYPE_WORDS[w].lower() in typ):
+            continue
+        if w in DIRECTIONS and DIRECTIONS[w].lower() in post:
+            continue
+        return False
+    if p["pre"] and str(a.get("abvPreDirectional") or "").upper() != p["pre"]:
+        return False
+    return str(a.get("HouseNumPrefix") or "").upper() == p["prefix"]
+
+
+def _town_name(muni):
+    return re.sub(r"^(city|village|town)\s+of\s+", "", str(muni or ""), flags=re.I).strip()
+
+
+def _dane(street, city, state, zip_):
+    if str(state or "WI").strip().upper() not in ("WI", "WISCONSIN"):
+        return None
+    ways = _dane_parts(street)
+    if not ways:
+        return None
+    p = ways[0]
+    firsts = sorted({re.sub(r"[^A-Z0-9' ]", "", w["words"][0].upper()).replace("'", "''") for w in ways} - {""})
+    if not firsts:
+        return None
+    r = requests.get(DANE_URL, timeout=(6, 25), headers={"User-Agent": UA}, params={
+        "where": "HouseNum = %d AND (%s)" % (p["num"], " OR ".join("UPPER(BaseName) LIKE '%s%%'" % f for f in firsts)),
+        "outFields": "HouseNumPrefix,BaseName,PostType,abvPostType,PostDirectional,abvPostDirectional,"
+                     "abvPreDirectional,ZIPCode,ZipMunicipality,FIPsMunicipality,Status,fullStreetName",
+        "returnGeometry": "true", "outSR": 4326, "f": "json", "resultRecordCount": 50})
+    r.raise_for_status()
+    j = r.json()
+    if j.get("error"):
+        raise RuntimeError("Dane County answered: %s" % j["error"])
+    hits = [f for f in j.get("features") or []
+            if f.get("geometry") and any(_dane_fits(f.get("attributes") or {}, w) for w in ways)]
+    want_zip, want_town = _five(zip_), _place(city)
+    by_zip = [f for f in hits if want_zip and _five(f["attributes"].get("ZIPCode")) == want_zip]
+    by_town = [f for f in hits if want_town and want_town in
+               (_place(f["attributes"].get("ZipMunicipality")), _place(f["attributes"].get("FIPsMunicipality")))]
+    # Where the address says it is, as with OpenStreetMap: its ZIP, else its
+    # town; with neither given, only an address the county has just once.
+    pick = by_zip or by_town or (hits if not want_zip and not want_town else [])
+    current = [f for f in pick if str(f["attributes"].get("Status") or "").lower() == "current"]
+    pick = current or pick
+    if not pick:
+        return None
+    pts = [(f["geometry"]["y"], f["geometry"]["x"]) for f in pick]
+    if max(_miles(pts[0][0], pts[0][1], y, x) for y, x in pts) > 0.25:
+        return None                     # one number on two different streets of that name: can't tell which
+    a, (lat, lng) = pick[0]["attributes"], pts[0]
+    # The town as the address was given, else its mailing town, as the
+    # Census answers: a Belleville address in the Town of Montrose reads
+    # Belleville, not Montrose.
+    town = _title(city) or _town_name(a.get("ZipMunicipality")) or _town_name(a.get("FIPsMunicipality")) or None
+    return {"lat": float(lat), "lng": float(lng),
+            "matched": "%s%s %s, %s, WI %s" % (a.get("HouseNumPrefix") or "", p["num"], a.get("fullStreetName") or "",
+                                              a.get("FIPsMunicipality") or town or "", a.get("ZIPCode") or ""),
+            "town": town, "zip": a.get("ZIPCode") or zip_ or None, "source": "danecounty"}
+
+
 # OpenStreetMap answers a street it only half knows with the first road of
 # that name anywhere in the state: a Fitchburg 53711 address on a street too
 # new for either map (9 Nov 2026) came back as the road of that name in
@@ -113,6 +223,60 @@ def _middle(city, state, zip_):
     return None
 
 
+HOUSE_NUMBER = re.compile(r"^[nsew]?\d+(-\d+)?[a-z]?$", re.I)
+DIRECTION_WORDS = {v.lower() for v in DIRECTIONS.values()}
+TYPE_SET = {v.lower() for v in TYPE_WORDS.values()}
+
+
+UNIT_TAIL = re.compile(r"\s*(#|\b(apt|unit|ste|suite|lot|bldg)\b\.?).*$", re.I)
+# A highway, county trunk or state road is written a dozen ways ("Hwy 69",
+# "STH 92", "CTH X", "County Road X", "WI-69"): its name isn't compared.
+HIGHWAY = re.compile(r"\b(hwy|highway|sth|cth|ush|county|state|route|rte|us|wis|wi)\b|\bwi-\d", re.I)
+
+
+def _road_words(s, numbered):
+    """A street's name as words to compare: house number off (when it has
+    one), each direction and type in one spelling ("N" and "North", "Tr" and
+    "Trail" alike)."""
+    words = [w.strip(".,").lower() for w in UNIT_TAIL.sub("", str(s or "")).split() if w.strip(".,")]
+    if numbered and len(words) > 1 and HOUSE_NUMBER.match(words[0]):
+        words = words[1:]
+    return [DIRECTIONS.get(w, TYPE_WORDS.get(w, w)).lower() for w in words]
+
+
+def _core(words):
+    """Without a direction or type the address may have left off."""
+    w = list(words)
+    if len(w) > 1 and w[0] in DIRECTION_WORDS:
+        w = w[1:]
+    if len(w) > 1 and w[-1] in DIRECTION_WORDS:
+        w = w[:-1]
+    if len(w) > 1 and w[-1] in TYPE_SET:
+        w = w[:-1]
+    return w
+
+
+def _same_road(street, road):
+    """OpenStreetMap's road is the street asked for. It fills a name it doesn't
+    know with the nearest that looks like it: "1 New Way" came back as New
+    Washburn Way, miles off. No road in its answer: nothing to compare."""
+    if not road or HIGHWAY.search(str(street or "")) or HIGHWAY.search(str(road)):
+        return True
+    a, b = _road_words(street, True), _road_words(road, False)
+    if a == b:
+        return True
+    # A direction or type left off is fine; two that disagree are two streets
+    # (North and South Main Street can be a mile apart; Park St isn't Park Ave).
+    for i in (0, -1):
+        if a and b and a[i] in DIRECTION_WORDS and b[i] in DIRECTION_WORDS and a[i] != b[i]:
+            return False
+    ta = a[:-1] if len(a) > 1 and a[-1] in DIRECTION_WORDS else a
+    tb = b[:-1] if len(b) > 1 and b[-1] in DIRECTION_WORDS else b
+    if ta and tb and ta[-1] in TYPE_SET and tb[-1] in TYPE_SET and ta[-1] != tb[-1]:
+        return False
+    return _core(a) == _core(b)
+
+
 def _wrong_state(a, state):
     iso = str(a.get("ISO3166-2-lvl4") or "")
     want = str(state or "WI").strip()
@@ -141,7 +305,7 @@ def _nominatim(street, city, state, zip_):
         for h in r.json() or []:
             a = h.get("address") or {}
             lat, lng = float(h["lat"]), float(h["lon"])
-            if _wrong_state(a, state):
+            if _wrong_state(a, state) or not _same_road(street, a.get("road")):
                 continue
             zips = _fives(a.get("postcode"))
             fits = (want_zip and want_zip in zips) or \
@@ -168,7 +332,7 @@ def find(street, city="", state="WI", zip_=""):
     if not street:
         return None
     failed = False
-    for look in (_census, _nominatim):
+    for look in (_census, _dane, _nominatim):
         try:
             got = look(street, city, state, zip_)
             if got:

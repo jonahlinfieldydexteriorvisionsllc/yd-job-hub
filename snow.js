@@ -243,6 +243,8 @@
           (a.minTriggerInches > 1 ? '<span class="snow-tag trigger">' + a.minTriggerInches + '"+ only</span>' : '') +
           (a.lat == null ? '<span class="snow-tag nolocation" title="Not found on the map yet, so it goes at the end of the route">no location</span>' : '') +
           (held ? '<span class="snow-tag hold">on hold</span>' : '') +
+          // No map knows the address: place it by hand (pinplace.js).
+          (edits && a.lat == null && window.YDPin ? '<button class="btn btn-sm snow-edit" onclick="snowPin(\'' + safeId(id) + '\')">📍 Place the pin</button>' : '') +
           // There was no way to change an account once it was added.
           (edits ? '<button class="btn btn-sm snow-edit" onclick="editSnowAccount(\'' + safeId(id) + '\')">Edit</button>' : '') +
         '</div>' +
@@ -477,13 +479,55 @@
     }
     return null;
   }
+  // OpenStreetMap's road is the street asked for: it fills a name it doesn't
+  // know with the nearest that looks like it ("1 New Way" came back as New
+  // Washburn Way, miles off). Each direction and type in one spelling, and a
+  // direction or type the address left off doesn't count. The same as
+  // geo.py _same_road.
+  const DIRS = { n: 'n', north: 'n', s: 's', south: 's', e: 'e', east: 'e', w: 'w', west: 'w', ne: 'ne', northeast: 'ne',
+    nw: 'nw', northwest: 'nw', se: 'se', southeast: 'se', sw: 'sw', southwest: 'sw' };
+  const DIR_SET = new Set(Object.values(DIRS));
+  const TYPE_SET = new Set(Object.values(STREET_TYPES).map(t => t.toLowerCase()));
+  // A highway, county trunk or state road is written a dozen ways ("Hwy 69",
+  // "CTH X", "County Road X"): its name isn't compared.
+  const HIGHWAY = /\b(hwy|highway|sth|cth|ush|county|state|route|rte|us|wis|wi)\b|\bwi-\d/i;
+  function roadWords(s, numbered) {
+    let words = String(s || '').replace(/\s*(#|\b(apt|unit|ste|suite|lot|bldg)\b\.?).*$/i, '')
+      .split(/\s+/).map(w => w.replace(/^[.,]+|[.,]+$/g, '').toLowerCase()).filter(Boolean);
+    if (numbered && words.length > 1 && /^[nsew]?\d+(-\d+)?[a-z]?$/i.test(words[0])) words = words.slice(1);
+    return words.map(w => DIRS[w] || (streetType(w) ? streetType(w).toLowerCase() : w));
+  }
+  function roadCore(words) {
+    let w = words.slice();
+    if (w.length > 1 && DIR_SET.has(w[0])) w = w.slice(1);
+    if (w.length > 1 && DIR_SET.has(w[w.length - 1])) w = w.slice(0, -1);
+    if (w.length > 1 && TYPE_SET.has(w[w.length - 1])) w = w.slice(0, -1);
+    return w.join(' ');
+  }
+  function sameRoad(street, road) {
+    if (!road || !street || HIGHWAY.test(street) || HIGHWAY.test(road)) return true;
+    const a = roadWords(street, true), b = roadWords(road, false);
+    if (a.join(' ') === b.join(' ')) return true;
+    // A direction or type left off is fine; two that disagree are two
+    // streets (North and South Main Street; Park St isn't Park Ave).
+    for (const i of [0, -1]) {
+      const x = a[i < 0 ? a.length - 1 : 0], y = b[i < 0 ? b.length - 1 : 0];
+      if (DIR_SET.has(x) && DIR_SET.has(y) && x !== y) return false;
+    }
+    const ta = a.length > 1 && DIR_SET.has(a[a.length - 1]) ? a.slice(0, -1) : a;
+    const tb = b.length > 1 && DIR_SET.has(b[b.length - 1]) ? b.slice(0, -1) : b;
+    const xa = ta[ta.length - 1], xb = tb[tb.length - 1];
+    if (TYPE_SET.has(xa) && TYPE_SET.has(xb) && xa !== xb) return false;
+    return roadCore(a) === roadCore(b);
+  }
   // The first of OpenStreetMap's matches that sits where the address says, or
   // null. `middles` keeps each town's middle for the rest of one lookup.
-  async function whereAsked(list, town, zip, middles) {
+  async function whereAsked(list, town, zip, middles, street) {
     const wantTown = placeOf(town);
     for (const h of list || []) {
       const ad = h.address || {};
       if (ad['ISO3166-2-lvl4'] && !/-WI$/i.test(ad['ISO3166-2-lvl4'])) continue;
+      if (!sameRoad(street, ad.road)) continue;
       const zips = fivesOf(ad.postcode);
       let fits = (!!zip && zips.indexOf(zip) !== -1) ||
         (!!wantTown && !(zip && zips.length) && PLACE_KEYS.some(k => placeOf(ad[k]) === wantTown));
@@ -552,7 +596,7 @@
         // A guessed town is the town asked for that try: with no ZIP to go
         // on, a match elsewhere is a guess gone wrong.
         let h = null;
-        try { h = await whereAsked(j, where.city || hint, zip, middles); } catch (e) { unsure = true; continue; }
+        try { h = await whereAsked(j, where.city || hint, zip, middles, a.street); } catch (e) { unsure = true; continue; }
         if (h) return found(h, where.city);
       }
     }
@@ -566,7 +610,7 @@
         const j = await fetch(osmUrl({
           q: line, countrycodes: 'us', format: 'json', limit: '5', addressdetails: '1',
         })).then(r => r.json());
-        const h = await whereAsked((j || []).filter(x => /wisconsin/i.test((x.address || {}).state || '')), hint, zip, middles);
+        const h = await whereAsked((j || []).filter(x => /wisconsin/i.test((x.address || {}).state || '')), hint, zip, middles, a.street);
         if (h) return found(h, null);
       } catch (e) { unsure = true; }
     }
@@ -659,6 +703,15 @@
     return (await locateParts(p)).geo;
   };
 
+  // The pin window for one account (pinplace.js), starting from its point.
+  window.snowPin = function (id) {
+    const a = accounts[id];
+    if (!a || !window.YDPin) return;
+    const p = partsOf(a);
+    window.YDPin.open({ kind: 'snow', id: id, name: a.name || 'This account', address: addressShown(a),
+      street: p.street, city: p.city, zip: p.zip, lat: a.lat, lng: a.lng });
+  };
+
   window.openSnowForm = function (id) {
     formSeq++;
     editingId = id || null;
@@ -671,6 +724,12 @@
     hint.textContent = a && a.lat == null
       ? 'This address has not been found on the map yet. Check the street name and house number, then save.'
       : (a && a.geocodedAs ? 'On the map as: ' + a.geocodedAs : GEO_HINT);
+    // A saved account's pin can be placed, or moved, by hand: a map can know
+    // the street and still put the house in the wrong spot.
+    if (a && id && window.YDPin && ydCan('snow', 'change')) {
+      hint.insertAdjacentHTML('beforeend', ' <button type="button" class="link-btn" onclick="snowPin(\'' + safeId(id) + '\')">📍 ' +
+        (a.lat == null ? 'Place' : 'Move') + ' the pin</button>');
+    }
     const btn = document.getElementById('sfSaveBtn');
     btn.disabled = false;
     btn.textContent = 'Save account';

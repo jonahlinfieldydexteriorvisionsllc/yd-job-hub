@@ -447,16 +447,39 @@ def _job_point(job_id, j):
     return (g["lat"], g["lng"]) if g else None
 
 
+def job_geo_key(j):
+    """What a job's map point is kept under: its address, so a changed address
+    is looked up again (and a pin placed by hand belongs to one address).
+    None when the job has no street."""
+    street = (j.get("address") or "").strip()
+    if not street:
+        return None
+    return "|".join([GEO_VERSION, street.lower(), (j.get("city") or "").strip().lower(), (j.get("zip") or "").strip()])
+
+
+def pin_job(job_id, j, lat, lng, by, db=None):
+    """A pin placed by hand (pins.py) for an address no map knows: kept like a
+    found point, so the estimate's miles and the day's job sites use it, until
+    the address changes."""
+    key = job_geo_key(j)
+    if not key:
+        raise ValueError("The job has no street address")
+    (db or _db()).collection("jobGeo").document(job_id).set({
+        "key": key, "found": True, "lat": lat, "lng": lng, "zip": None, "at": _now().isoformat(),
+        "byHand": {"by": by, "at": _now().isoformat()}})
+
+
 def _job_geo(job_id, j):
     """{lat, lng, zip} for a job's address, or None. `zip` is the one the
-    Census has for the street (None when only OpenStreetMap found it): the
-    estimate checks the ZIP typed on the job against it before sending."""
+    Census or Dane County has for the street (None when only OpenStreetMap
+    found it, or a pin was placed by hand): the estimate checks the ZIP typed
+    on the job against it before sending."""
     street = (j.get("address") or "").strip()
     city = (j.get("city") or "").strip()
     zip_ = (j.get("zip") or "").strip()
     if not street:
         return None
-    key = "|".join([GEO_VERSION, street.lower(), city.lower(), zip_])
+    key = job_geo_key(j)
     ref = _db().collection("jobGeo").document(job_id)
     snap = ref.get()
     if snap.exists:
@@ -464,6 +487,11 @@ def _job_geo(job_id, j):
         # A point found before the ZIP was kept is looked up once more.
         if g.get("key") == key and (not g.get("found") or "zip" in g):
             return {"lat": g["lat"], "lng": g["lng"], "zip": g.get("zip")} if g.get("found") else None
+        # A pin placed by hand belongs to its address, not to a version of
+        # the lookup: a newer GEO_VERSION keeps it (and files it anew).
+        if g.get("byHand") and g.get("found") and str(g.get("key") or "").split("|", 1)[1:] == key.split("|", 1)[1:]:
+            ref.update({"key": key})
+            return {"lat": g["lat"], "lng": g["lng"], "zip": g.get("zip")}
     # The Census first, OpenStreetMap after (geo.py): OpenStreetMap alone
     # missed rural fire-number addresses.
     import geo
@@ -472,7 +500,7 @@ def _job_geo(job_id, j):
     except Exception as e:              # noqa: BLE001
         print("digest: job address lookup failed:", job_id, e)
         return None                     # no answer is not "not found": try again next time
-    zip_found = str(hit.get("zip") or "")[:5] if hit and hit.get("source") == "census" else ""
+    zip_found = str(hit.get("zip") or "")[:5] if hit and hit.get("source") in ("census", "danecounty") else ""
     ref.set({"key": key, "found": bool(hit), "lat": hit["lat"] if hit else None,
              "lng": hit["lng"] if hit else None, "zip": zip_found or None, "at": _now().isoformat()})
     return {"lat": hit["lat"], "lng": hit["lng"], "zip": zip_found or None} if hit else None

@@ -1394,10 +1394,25 @@ def _geo(request, path, headers):
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     if request.method == "OPTIONS":
         return ("", 204, headers)
-    if path not in ("/geo/find", "/geo/suggest", "/geo/towns"):
+    if path not in ("/geo/find", "/geo/suggest", "/geo/towns", "/geo/pin", "/geo/link"):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    # A pin placed by hand for an address no map knows (pins.py): on a snow
+    # account for whoever may change Snow, on a job for whoever may change jobs.
+    if path == "/geo/pin":
+        import pins
+        d = request.get_json(silent=True) or {}
+        try:
+            who = _caller(request, "snow" if d.get("kind") == "snow" else "jobs", "change")
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        try:
+            out = pins.place(_db, who, d)
+        except Exception as e:                      # noqa: BLE001
+            print("geo pin failed:", e)
+            return (json.dumps({"error": "The pin couldn't be saved just now"}), 502, json_headers)
+        return (json.dumps(out), 400 if out.get("error") else 200, json_headers)
     # Addresses are typed on jobs and snow accounts, contacts and suppliers
     # -- and each of their forms fills its town and ZIP in (addr.js).
     areas = ("snow", "jobs", "contacts", "supplies")
@@ -1411,6 +1426,11 @@ def _geo(request, path, headers):
     if who is None:
         return (json.dumps({"error": str(why)}), 401, json_headers)
     d = request.get_json(silent=True) or {}
+    # The spot in a Google Maps link pasted into the pin window (pins.py).
+    if path == "/geo/link":
+        import pins
+        out = pins.read_link(d.get("text"))
+        return (json.dumps(out), 400 if out.get("error") else 200, json_headers)
     if path == "/geo/suggest":
         try:
             return (json.dumps({"hits": geo.suggest(d.get("q"))}), 200, json_headers)

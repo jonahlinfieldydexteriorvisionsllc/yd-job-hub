@@ -6329,3 +6329,26 @@ html[data-bids-page] #panel-boards .section-head { display: none; }
 .yd-plan.big { cursor: zoom-out; }
 .yd-plan.big svg { width: 220% !important; max-width: none; }
 @media print { .yd-plan.big svg { width: 100% !important; } }
+
+/* Placing a map pin by hand (pinplace.js): the map as big as the screen
+   allows, the tools wrapping to rows on a phone, every button a thumb wide. */
+.pin-modal { max-width: 760px; }
+.pin-addr { margin: 0 0 4px; }
+.pin-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.pin-tools .btn { min-height: 44px; display: inline-flex; align-items: center; }
+/* About 430 px of the window is around the map: the map takes what's left of the screen, so Save never falls below it. */
+.pin-map { height: max(240px, min(460px, calc(100vh - 430px))); height: max(240px, min(460px, calc(100dvh - 430px))); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; position: relative; background: var(--surface-2, #eee); }
+.pin-map-wait { padding: 24px 16px; text-align: center; color: var(--muted, #666); }
+.pin-mark { font-size: 32px; line-height: 36px; text-align: center; filter: drop-shadow(0 1px 1px rgba(0,0,0,.5)); }
+.pin-paste { margin-top: 10px; }
+.pin-paste-row { display: flex; gap: 8px; }
+.pin-paste-row input { flex: 1; min-width: 0; min-height: 44px; }
+.pin-paste-row .btn { min-height: 44px; flex: none; }
+.pin-say { min-height: 1.3em; margin: 6px 0 0; font-size: 14px; }
+.pin-say.bad { color: var(--st-now); }
+.pin-actions .btn { min-height: 44px; }
+@media (max-width: 720px) {
+  /* What's around the map is about 450 px on a phone: the map takes the rest, so Save stays on screen. */
+  .pin-map { height: max(200px, calc(100vh - 470px)); height: max(200px, calc(100dvh - 470px)); min-height: 200px; }
+  .pin-tools .btn { flex: 1 1 calc(50% - 8px); justify-content: center; }
+}

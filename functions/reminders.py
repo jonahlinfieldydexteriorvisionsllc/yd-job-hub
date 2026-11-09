@@ -204,6 +204,10 @@ def run():
         # without a signature) put on the job's QuickBooks invoice
         # (changeorders.py).
         ("change orders", (), lambda: _change_orders(db, people, now)),
+        # Addresses no map knows: a snow account looked up again once a day,
+        # and what still isn't found a card on his My to-dos to place the
+        # pin, or have Claude do it (pins.py).
+        ("map pins", (), lambda: _map_pins(db, people, now)),
         # The posting schedule: a Facebook / Google / Nextdoor post whose
         # time has come goes up (social.py; planned after the summaries).
         # Last: a slow Facebook photo upload holds nothing else up.
@@ -224,6 +228,11 @@ def run():
     if clocked.get("stopped"):
         sent.append({"clockStopped": clocked["stopped"]})
     return sent
+
+
+def _map_pins(db, people, now):
+    import pins
+    return pins.run(db, people, now)
 
 
 def _storm_watch(db, people, prefs, now):
