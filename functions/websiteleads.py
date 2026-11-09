@@ -27,6 +27,11 @@ scheduler's proof, so everything in it is a stranger's data:
     Jonah, 5 Nov 2026: a form from his house was refused and thrown away after
     the day's tests used up the address, "I'm gonna miss out on clients".
   - The same form twice in a day (a double tap): one lead, one buzz.
+  - A sales pitch typed into the form by a person (pitch): no lead, no card,
+    no buzz, no reply written; the whole form goes to his inbox marked spam
+    with the reasons, from the same room as the hidden box's. Jonah, 9 Nov
+    2026: "ive already gotten two spam leads" (one selling Google rankings, one
+    a lookup tool); the hidden box only stops robots.
 TODO (when Jonah's Cloudflare account exists): Cloudflare's spam check,
 Turnstile. Its site key goes in the form, its secret in this service's
 variables (never in this public repo), and _site checks the token first.
@@ -102,6 +107,174 @@ def cors(origin):
 
 def is_bot(body):
     return isinstance(body, dict) and bool(str(body.get("website") or "").strip())
+
+
+# ---------------------------------------------------------------- sales pitches
+#
+# People selling something to the business type their pitch into the form
+# like a customer, picking a service so it goes through. Every one in his form
+# history (2024 to 9 Nov 2026: Google rankings, websites, leads, financing for
+# his customers, buying the business, a "partnership" sign-up, a cleaning
+# company, a lookup tool) talks about HIS business, not their yard, and most
+# have words no customer writes. Plain code, so it costs nothing and is the
+# same every time (code over Claude).
+#
+# Each group counts once however often it matches. A form is a pitch only with
+# at least one STRONG sign (a seller's words, weighted 3 or 4) AND SPAM_AT
+# points in all, so a real customer whose message happens to have a link, a "hope this
+# finds you well" or a work email never gets there on those alone. A form
+# caught by mistake isn't lost: it is in his inbox with every box and the
+# reasons. Things that aren't pitches (a prank, an overpayment scam, a vague
+# "interested in your services") still come in as leads.
+SPAM_AT = 4
+_rx = re.compile
+# Weight 4: words only a seller writes, enough by themselves.
+# Weight 3: a seller's words a customer could just about write, so never enough alone.
+# Careful with 4: "seo" is also a surname and "demo" is a contractor's word for
+# tearing out, so neither is a 4 by itself.
+STRONG = (
+    (4, "it offers to stop emailing you",
+     _rx(r"\bunsubscribe|\breply\W{0,3}stop\b|take you off (my|our|the) (mailing |email )?list|rather not hear from (me|us)"
+         r"|remove you from (my|our|this) (mailing |email )?list|\bto opt[- ]?out\b|don'?t want to hear from (me|us)")),
+    (4, "it sells Google rankings or reviews",
+     _rx(r"\bseo (services|agency|company|expert|specialist|packages?|campaigns?|audit|strategy|optimi[sz]ation)\b"
+         r"|\b(local|technical|on-page) seo\b|\bseo (and|&) (ads|marketing|web)|search engine optimi[sz]|\bmap pack|local search (results|rankings?)"
+         r"|google (business )?(profile|listing) (optimi[sz]|management|rankings?)"
+         r"|help(s|ing)? (you |your business |contractors |businesses |landscapers |companies |local businesses )?rank\b"
+         r"|rank (you|your (business|site|website|company))\b|get (you|your business) (ranked|ranking|to rank|on the first page)"
+         r"|listing (on google )?is (unclaimed|incomplete|not verified|unverified)|claim your (free )?(google )?listing"
+         r"|(review|reputation) management|(manage|managing|get (you )?more) (your )?(online )?(5|five)[- ]star reviews")),
+    (3, "it talks about where you show up on Google",
+     _rx(r"google maps (results?|rankings?|pack)|(top (3|three)|first page|page one) (on|of|in) (google|the maps?|search results)"
+         r"|(not|isn'?t|aren'?t) (currently )?showing up (in|on) (google|the top|search results|the maps?)")),
+    (4, "it sells leads",
+     _rx(r"\b(generate|get you|bring you|send you|exclusive|qualified|high[- ]quality) leads\b|\blead (generation|gen)\b"
+         r"|\bpay[- ]per[- ]lead\b|\$\s?\d+ (per|a|each) lead\b|\b(jobs|leads|customers) sent (straight )?to you")),
+    (3, "it offers more leads", _rx(r"\b(more|new|quality|steady|consistent) leads\b")),
+    (3, "it sells websites or marketing",
+     _rx(r"\b(we|i) (build|design|redesign|develop|create) websites|\b(we|i) (can )?(build|design|make|create) (you )?a (new |better |modern )?website"
+         r"|website (redesign|audit|development|traffic|optimi[sz]ation)|free (website |seo )?audit"
+         r"|(digital|social media|online|internet) marketing|marketing (agency|services|campaign|strategy|firm)"
+         r"|social media (management|manager for your)|(improve|boost|grow|strengthen|build) your online presence"
+         r"|(improve|redesign|upgrade|refresh) your (website|site)\b")),
+    (4, "it sells backlinks or guest posts", _rx(r"\bbacklinks?\b|guest posts?\b|domain authority|\bhigh da\b")),
+    (4, "it sells payment processing or financing for your customers",
+     _rx(r"get(ting)? your customers approved|approve more (of )?your customers|credit (declines?|turndowns?)"
+         r"|(second|2nd) chance (credit|financing)|merchant cash advance|merchant (services|processing)"
+         r"|(lower|lowest|low|better) (credit card |card )?processing (fees|rates)|processing rates|switch and save"
+         r"|no collateral|funding up to \$")),
+    (3, "it offers you loans or funding",
+     _rx(r"\bcash advance|working capital (for|loan|to grow)|business (loans?|funding|line of credit)\b"
+         r"|funding (for|options for) your business|\b(we|i) offer (equipment |business )?financing")),
+    (4, "it asks about buying your business",
+     _rx(r"(buyers|investors|clients?|groups?|firms?) (interested in|looking (to|for)) (buy|purchas|acquir)\w*"
+         r"|(acquire|acquiring|purchase|purchasing|buy|buying) (your|a|an) ((landscaping|lawn( care)?|snow( removal)?|hardscaping|small|local|established) )?"
+         r"(business|company)\b(?!'s| (truck|car|van|vehicle|card|phone|account))"
+         r"|interested in selling\s*(your (business|company)|\?)|would you consider selling(\s*(your|the) (business|company)|\?)"
+         r"|sell(ing)? your (business|company)\b(?!'s)")),
+    (4, "it wants you in a directory", _rx(r"get listed (on|in) our|our (local )?(contractor|business|home ?pro) directory"
+                                           r"|sign up for your (free )?listing")),
+    (3, "it offers a partnership or a program to sign up for",
+     _rx(r"partner program|partnerships? (outreach|team|opportunit)|(potential|mutually beneficial) (partnership|arrangement)"
+         r"|collaboration opportunit|feature you on our (platform|site|blog|channel|page)"
+         r"|vendor (network|program|platform)|join (our|the) (network|platform|directory|program)"
+         r"|sign up (here|below|on your own|for (free|our))|referral (partner|program|network)"
+         r"|connect (landscapers|contractors|pros) with")),
+    (4, "it sells a tool",
+     _rx(r"built (my|this|our) (tool|app|software|platform)|\bfree trial\b"
+         r"|(made|recorded) (you )?a (quick |short |personali[sz]ed |custom )?video (for you|about your (business|website|company)"
+         r"|showing (how )?(your|you) (business|could|can|are))")),
+    (3, "it sells software or a demo",
+     _rx(r"\bmy tool\b(?! ?shed)|\bour (software|platform|saas|app)\b|how it works\W{0,3} demo"
+         r"|(book|watch) a (quick |free |short |live )?demo\b|(quick|free|short|live) (product )?demo\b(?! (day|of|the))"
+         r"|video (showing|of) (exactly )?how (i|we|your business)\b|\bai (chat ?bots?|receptionists?|assistants?|phone agents?)\b"
+         r"|\b(scheduling|crm|estimating|invoicing|routing|payroll|hr) software\b")),
+    (3, "it offers to come by and sell you a service",
+     _rx(r"\b(i'?ll|i will|we'?ll|we will|i'?m going to) be (in|around|near) your (area|neighborhood|building|office)"
+         r"|(stop|come) by your (office|business|shop|building)"
+         r"|(no[- ]obligation|free) (cleaning|janitorial|window cleaning|office cleaning|carpet cleaning|solar|insurance) "
+         r"(estimate|quote|assessment|inspection)")),
+    (3, "it offers the business something companies buy",
+     _rx(r"\bvirtual assistants?\b|offshore (staff|team|talent|workers)|\bbookkeeping\b|\btax prep(aration)?\b"
+         r"|payroll services|truck wraps?|logo (shirts|apparel|uniforms)|janitorial services|commercial (window|janitorial) (cleaning|and)"
+         r"|insurance agent|workers'? comp(ensation)? (quote|rates|at lower)|subcontract(ing)? (work|opportunities)"
+         r"|extra crews on (big|your) jobs|(wholesale|contractor) (pricing|prices) (on|for|to) (mulch|stone|soil|pavers|plants|companies|contractors)"
+         r"|wholesale (mulch|stone|soil|pavers|plants)")),
+)
+WEAK = (
+    (2, "it's a pasted sales email (it has a Subject line)", _rx(r"(^|\n)\s*subject\s*:")),
+    (2, "it talks about your business, not their yard",
+     _rx(r"\b(businesses|companies) like yours|contractors like (you|yours)|\b(similar|local|other) (businesses|companies|contractors)\b"
+         r"|in your (industry|niche|market)\b|\byour (customers|clients|competitors|competition|rankings?|leads|marketing|brand"
+         r"|online presence|sales|revenue|cash ?flow|profits?|bottom line|website traffic)\b"
+         r"|(lawn care|landscaping|landscape|hardscaping|snow removal|home service) (businesses|companies|contractors|pros) "
+         r"(in|near|around)|\bfor (contractors|landscapers|landscaping companies|lawn care companies)\b"
+         r"|speciali[sz](e|es|ing) in (small )?(contractors|landscapers)|struggling to find (enough )?(work|customers|jobs)")),
+    (2, "it reads like a sales follow-up",
+     _rx(r"\bmy (previous|last|earlier|other) (message|email|note)|follow(ing)?[- ]up (on|in case)"
+         r"|(landed|went|ended up) in (your )?spam|quick question for|while researching"
+         r"|noticed (that )?(you('re| are) (not|currently)|your (business|company|website|site|listing|google))")),
+    (1, "it opens like a cold email",
+     _rx(r"\bi (came across|found|stumbled (up)?on) (your|yd)\b|hope (this|my (message|email|note)) finds you"
+         r"|hope (your (day|week)|you're|you are) (is going|doing|going)")),
+    (1, "it asks for a call or a meeting",
+     _rx(r"(hop|jump) on a (quick |short )?(call|zoom)|set up a (quick |short )?(call|meeting|zoom)"
+         r"|\b(10|15|20|30)[- ]min(ute)?s? (call|chat|meeting)|calendly|good time (to|for a) (chat|call|talk)")),
+    (1, "it quotes a price a month", _rx(r"\$\s?\d[\d,]*(\.\d\d)?\s*(/|per|a|each)\s*(month|mo)\b")),
+    (1, "it names your business", _rx(r"yd exterior visions|yard dudes")),
+)
+# Links a customer sends: photos, a listing, a picture of what they like.
+LINK = _rx(r"https?://[^\s<>()]+|\bwww\.[^\s<>()]+|\b[a-z0-9-]+\.(com|net|io|co|org|ly|biz|info)/[^\s<>()]*")
+THEIR_LINK = _rx(r"photos\.app\.goo\.gl|photos\.google|drive\.google|maps\.app\.goo\.gl|goo\.gl/maps|google\.com/maps"
+               r"|icloud\.com|dropbox|zillow|redfin|realtor\.com|imgur|pinterest|pin\.it|instagram|facebook|nextdoor"
+               r"|homedepot|menards|lowes")
+# Words in sellers' addresses. Not solutions, ventures, growth, consulting or capital:
+# those turned up in real-looking requests from property managers and small firms.
+SALES_EMAIL = _rx(r"seo|marketing|leads|digital|agency|outreach|website|webdesign|funding|branding")
+SALES_TITLE = _rx(r"\b(founder|co-?founder|business development|account executive|partnerships? (outreach|manager)"
+                r"|sales (manager|director|representative)|marketing (manager|director|specialist|consultant|coordinator)"
+                r"|growth (specialist|manager)|outreach (specialist|manager|coordinator))\b")
+_STATES = ("AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK "
+           "OR PA RI SC SD TN TX UT VT VA WA WV WY DC").split()
+_STATE_NAMES = ("alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|georgia|hawaii|idaho"
+                "|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|massachusetts|michigan|minnesota"
+                "|mississippi|missouri|montana|nebraska|nevada|new hampshire|new jersey|new mexico|new york"
+                "|north carolina|north dakota|ohio|oklahoma|pennsylvania|rhode island|south carolina"
+                "|south dakota|tennessee|texas|utah|vermont|virginia|west virginia|wyoming")
+# Only as the last thing on the address line. Oregon and Washington are left
+# out of the names: Oregon, WI is in his area and Washington is a street.
+ELSEWHERE = _rx(r",\s*(%s)\.?(\s+\d{5}(-\d{4})?)?(\s*,?\s*(usa|us|united states))?\s*$" % "|".join(_STATES)
+              + r"|,\s*(%s)(\s+\d{5}(-\d{4})?)?(\s*,?\s*(usa|us|united states))?\s*$" % _STATE_NAMES, re.I)
+
+
+def _plain(text):
+    return (text or "").lower().replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+
+
+def pitch(f):
+    """The reasons a form reads like someone selling something to the business,
+    or [] when it doesn't (that is, when it isn't sure: see the note above)."""
+    text = _plain(f.get("message"))
+    if not text.strip():
+        return []
+    strong = [(n, why) for n, why, rule in STRONG if rule.search(text)]
+    signs = strong + [(n, why) for n, why, rule in WEAK if rule.search(text)]
+    links = {x.rstrip(".,!?;:").lower() for x in (m.group(0) for m in LINK.finditer(text)) if not THEIR_LINK.search(x)}
+    if links:
+        signs.append((2, "it has web links") if len(links) > 1 else (1, "it has a web link"))
+    if SALES_EMAIL.search(f.get("email") or ""):
+        signs.append((2, "their email address is a sales or marketing one"))
+    if SALES_TITLE.search(text):
+        signs.append((2, "it's signed with a sales job title"))
+    if ELSEWHERE.search((f.get("address") or "").strip()) and not re.search(r"\b(wi|wisconsin)\b", _plain(f.get("address"))):
+        signs.append((2, "the project address is outside Wisconsin"))
+    if not strong or sum(n for n, _w in signs) < SPAM_AT:
+        return []
+    return [w for _n, w in sorted(signs, key=lambda s: -s[0])]
+
+
+def pitch_why(reasons):
+    return ONLY_HERE + "It reads like someone selling something to you, not asking for work: %s." % "; ".join(reasons)
 
 
 def _box(v, n, lines=False):

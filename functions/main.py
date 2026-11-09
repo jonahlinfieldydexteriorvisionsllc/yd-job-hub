@@ -1559,6 +1559,15 @@ def _site(request, path):
         return (json.dumps({"error": "too many"}), 429, json_headers)
     if not form:
         return (json.dumps({"error": "a name and a way to reach you are needed"}), 400, json_headers)
+    pitch = [] if nominating else wl.pitch(form)
+    if pitch:
+        # Someone selling something (Jonah, 9 Nov 2026: "ive already gotten two
+        # spam leads"): no lead, card, buzz or reply, only his inbox marked spam.
+        # Answered like the hidden box: a seller learns nothing, and a real
+        # person caught by mistake is told if it didn't reach him.
+        if wl.just_email(_db, form, wl.pitch_why(pitch), " (spam)", robot=True):
+            return (ok, 200, json_headers)
+        return (json.dumps({"error": "too many"}), 429, json_headers)
     # Every way a form can't go in below still tries his inbox first, and the
     # visitor only sees the failure, with the phone number, if that fails too.
     done, failed = None, None
