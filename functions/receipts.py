@@ -1193,25 +1193,101 @@ def match_crew(people, payee):
     return hits[0] if len(hits) == 1 else ""
 
 
+# One payment, one paycheck, however many emails tell of it. The credit
+# union's emails carry no confirmation number and it sends up to five for
+# one payment ("was created" and "was sent", each twice, then "has been
+# delivered"), so one payment on 4 Nov 2026 became four paychecks and the
+# pay sheet counted it as paid four times. With no number, the same person,
+# the same amount and the same day is the same payment, and a record of them
+# up to PAYCHECK_DAYS either side (set up on a Friday, delivered on the
+# Monday) takes the email too -- unless the two carry different confirmation
+# numbers, which makes them two payments. The same person is the same name
+# however the bank orders or capitalises it ("SMITH, JO"), or the same
+# crew member the name points to, including one picked by hand on the
+# record. Two payments of the same amount to the same person inside that
+# window would read as one; that is far rarer than the bank's repeats, and
+# pay goes out a week or two apart. Paychecks are saved one at a time, in
+# run()'s loop over finished reads, never in the reading threads, and run()
+# holds a lock (_claim), so two emails of one payment can't both find
+# nothing and both write.
+PAYCHECK_DAYS = 3
+
+
+def _paycheck_day(got, m):
+    """The day the payment went: the read's date, else the email's day."""
+    d = got.get("date") or ""
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+        return d
+    return datetime.datetime.fromtimestamp(m["internalDate"] / 1000, dg.TZ).strftime("%Y-%m-%d")
+
+
+def _name_key(name):
+    """A person's name with order, case and punctuation left out."""
+    return " ".join(sorted(_norm(name).split()))
+
+
+def _same_payment(db, payee, uid, cents, day, conf):
+    """A record already kept of this payment under another id: the same
+    person (the name, in any order, or the crew member it points to) and
+    amount, within PAYCHECK_DAYS of `day`, and no confirmation number that
+    says otherwise. None if there is none, or not enough to tell."""
+    if not _name_key(payee) or cents <= 0:
+        return None
+    try:
+        d0 = datetime.date.fromisoformat(day)
+    except ValueError:
+        return None
+    best = None
+    for s in db.collection("paychecks").where("cents", "==", cents).stream():
+        p = s.to_dict() or {}
+        if _name_key(p.get("payee")) != _name_key(payee) and not (uid and p.get("uid") == uid):
+            continue
+        theirs = _norm(p.get("confirmation"))
+        if conf and theirs and theirs != _norm(conf):
+            continue
+        try:
+            gap = abs((datetime.date.fromisoformat(str(p.get("date") or "")) - d0).days)
+        except ValueError:
+            continue
+        if gap <= PAYCHECK_DAYS and (best is None or gap < best[0]):
+            best = (gap, s.reference, p)
+    return (best[1], best[2]) if best else None
+
+
 def _save_paycheck(db, m, got, people):
     """Money sent from the business's bank to a person: a paycheck, kept in
     paychecks/{id} for the Clock tab rather than among the receipts. The
     bank's confirmation number makes the same payment one record however
-    many emails mention it."""
+    many emails mention it; with no number, the person, amount and day do
+    (PAYCHECK_DAYS)."""
     bank = (got.get("vendor") or "").strip()[:80] or "Bank"
     conf = (got.get("order_number") or "").strip()[:60]
-    pid = "pc" + hashlib.sha1(("%s|%s" % (vendor_key(bank), _norm(conf) or "msg " + m["id"]))
-                              .encode()).hexdigest()[:20]
+    payee = (got.get("payee") or "").strip()[:120]
+    cents = _cents(got.get("total"))
+    date = _paycheck_day(got, m)
+    uid = match_crew(people, payee)
+    if conf or not _name_key(payee) or cents <= 0:
+        # As it always was, so records kept before keep their ids.
+        key = "%s|%s" % (vendor_key(bank), _norm(conf) or "msg " + m["id"])
+    else:
+        key = "%s|payee %s|%d|%s" % (vendor_key(bank), _name_key(payee), cents, date)
+    pid = "pc" + hashlib.sha1(key.encode()).hexdigest()[:20]
     ref = db.collection("paychecks").document(pid)
     mail = {"id": m["id"], "threadId": m["threadId"], "subject": m["subject"][:300], "at": m["internalDate"]}
-    if ref.get().exists:
-        ref.update({"mail": firestore.ArrayUnion([mail])})
-        return pid
-    payee = (got.get("payee") or "").strip()[:120]
-    date = got.get("date") if re.match(r"^\d{4}-\d{2}-\d{2}$", got.get("date") or "") else \
-        datetime.datetime.fromtimestamp(m["internalDate"] / 1000, dg.TZ).strftime("%Y-%m-%d")
+    snap = ref.get()
+    have = (snap.to_dict() or {}) if snap.exists else None
+    if have is None:
+        twin = _same_payment(db, payee, uid, cents, date, conf)
+        if twin:
+            ref, have = twin
+    if have is not None:
+        patch = {"mail": firestore.ArrayUnion([mail])}
+        if conf and not have.get("confirmation"):
+            patch["confirmation"] = conf
+        ref.update(patch)
+        return ref.id
     ref.set({
-        "payee": payee, "uid": match_crew(people, payee), "cents": _cents(got.get("total")),
+        "payee": payee, "uid": uid, "cents": cents,
         "date": date, "bank": bank, "confirmation": conf,
         "memo": (got.get("job_hint") or got.get("summary") or "").strip()[:200],
         "mail": [mail], "link": gmail_link(m["threadId"]), "status": "new",
