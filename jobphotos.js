@@ -11,9 +11,12 @@
 // when, both addresses -- and that record is what the screens watch.
 //
 // Made for a phone on one bar, or none: a photo is shrunk on the phone first
-// (a 4 MB camera picture becomes a few hundred KB, and the location the camera
-// stamped in it is dropped), kept on the phone (IndexedDB) until it is up, and
-// sent when the signal comes back -- even if the app was closed in between.
+// (a 4 MB camera picture becomes a few hundred KB), kept on the phone
+// (IndexedDB) until it is up, and sent when the signal comes back -- even if
+// the app was closed in between. Shrinking drops the time and place the camera
+// wrote into the photo, so those are read first (photoplace.js) and kept on
+// its record as `taken` {at, lat, lng, acc}; whoever may see jobs is told when
+// a photo was taken somewhere other than its job (9 Nov 2026).
 //
 // Anyone working sees and adds photos. Whoever took one can change its stage
 // or ask for it to be deleted; deleting is for whoever may change jobs (the
@@ -134,15 +137,20 @@
     if (!files.length || !forJob || !STAGE_NAME[stage]) return 0;
     if (!signedIn()) { showToast('Sign in to add photos'); return 0; }
     if (files.length > MAX_PICK) showToast('Adding the first ' + MAX_PICK + ' — pick the rest after');
-    let failed = 0, took = 0;
+    let failed = 0, took = 0, elsewhere = 0;
+    const ctx = placeCtx(forJob);
     for (const f of files.slice(0, MAX_PICK)) {
       try {
+        // Read before shrinking: the shrunk copy keeps none of it.
+        const taken = window.YDPhotoPlace ? await YDPhotoPlace.read(f) : null;
         const img = await decode(f);
         const full = await toJpeg(img, FULL_PX, 0.82);
         const thumb = await toJpeg(img, THUMB_PX, 0.7);
         if (img.close) img.close();
         const item = { id: newId(), jobId: forJob, stage: stage, full: full.blob, thumb: thumb.blob,
-                       w: full.w, h: full.h, by: myUid(), byName: myName(), at: new Date().toISOString() };
+                       w: full.w, h: full.h, by: myUid(), byName: myName(), at: new Date().toISOString(),
+                       taken: takenRec(taken) };
+        if (offJob(item, placeOf(item, ctx))) elsewhere++;
         // Its number: the next after the job's highest -- known only once the
         // job's photos have come (else it is given one later; see numbered).
         if (forJob === jobId && loaded) {
@@ -160,8 +168,138 @@
         console.warn('[photos] could not read a photo:', e);
       }
     }
-    if (failed) showToast(failed === 1 ? 'One photo could not be read — try it as a JPG' : failed + ' photos could not be read');
+    // Both said when both happened: a photo that wouldn't read must not hide
+    // one taken at another job.
+    const said = [];
+    if (failed) said.push(failed === 1 ? 'One photo could not be read — try it as a JPG' : failed + ' photos could not be read');
+    if (elsewhere) said.push((elsewhere === 1 ? 'One photo was' : elsewhere + ' photos were') +
+      ' taken at another job’s address — ' + (elsewhere === 1 ? 'tap it' : 'tap one') + ' to see which');
+    if (said.length) showToast(said.join('. '), elsewhere ? 7000 : undefined);
     return took;
+  };
+
+  // ------------------------------------------------ where it was taken
+  //
+  // Only for whoever may see jobs: the crew's phones hold no job addresses.
+  // Every job this device has goes in, finished ones too, so a photo taken at
+  // another job's address can be named.
+
+  const seesJobs = () => typeof ydCan === 'function' && ydCan('jobs', 'see');
+  // The photo's own time and place, as kept on its record: never undefined.
+  function takenRec(t) {
+    if (!t || (!t.at && t.lat == null)) return null;
+    const n = v => (typeof v === 'number' && isFinite(v) ? v : null);
+    const lat = n(t.lat), lng = n(t.lng);
+    return { at: t.at || null, lat: lat != null && lng != null ? lat : null, lng: lat != null && lng != null ? lng : null,
+             acc: lat != null && lng != null ? n(t.acc) : null };
+  }
+  function jobRecord(id) {
+    try {
+      const raw = id && typeof readJobBlob === 'function' ? readJobBlob(id) : null;
+      return raw ? Object.assign(JSON.parse(raw), { _id: id }) : null;
+    } catch (e) { return null; }
+  }
+  // What every photo of one job is judged against, worked out once a draw.
+  function placeCtx(id) {
+    if (!id || !seesJobs() || !window.YDPhotoPlace) return null;
+    const job = jobRecord(id);
+    if (!job) return null;
+    let all = [];
+    try { all = typeof loadAllJobs === 'function' ? loadAllJobs() : []; } catch (e) { all = []; }
+    return { job: job, all: all };
+  }
+  const placeOf = (p, ctx) => (ctx && p && p.taken && p.taken.lat != null ? YDPhotoPlace.judge(p.taken, ctx.job, ctx.all) : null);
+  // Flagged (badge, count, toast) only when another job really is where it
+  // was taken: a photo from the shop, home or a supplier's yard is far from
+  // the job but on no wrong job, and a farm or a big lot can run past a mile.
+  // "It's right" (placeOk) clears it for good.
+  const offJob = (p, v) => !!v && v.kind === 'other' && !(p && p.placeOk);
+  // "Pat Smith’s address (Paver patio job)": whose, and which of their
+  // jobs, since one customer can have several.
+  function jobName(j) {
+    const name = String((j && j.customerName) || '').trim();
+    const what = typeof jobWhat === 'function' ? String(jobWhat(j) || '').trim() : '';
+    return (name ? name + '’s address' : 'another job’s address') + (what ? ' (' + what + ' job)' : '');
+  }
+  const shortName = j => String((j && j.customerName) || '').trim() || 'that job';
+  const moveBtn = (p, to, words) => '<button type="button" class="btn jp-v-move" onclick="jpMove(\'' + safe(p.id) + '\', \'' + safe(to) + '\')">' + esc(words) + '</button>';
+  // The line under the viewer's top: when it was taken (only when that is
+  // not about when it was added), and where, against its job. The crew see
+  // only the time: their phones hold no job addresses.
+  function placeHtml(p, v) {
+    const t = p.taken || {};
+    const parts = [], btns = [];
+    const tAt = Date.parse(t.at || ''), added = Date.parse(p.at || '');
+    if (isFinite(tAt) && (!isFinite(added) || Math.abs(added - tAt) > 30 * 60000)) parts.push('🕒 Taken ' + esc(when(t.at)));
+    const can = !p.pending && changesJobs();
+    if (v) {
+      const away = v.miles != null ? esc(YDPhotoPlace.milesWords(v.miles)) : '';
+      const to = v.job && (v.job._id || v.job.id);
+      if (v.kind === 'here') parts.push('📍 Taken at the job');
+      else if (v.kind === 'near') parts.push('📍 Taken ' + away + ' from the job’s address');
+      else if (v.kind === 'far') parts.push('📍 Taken ' + away + ' from the job’s address');
+      else if (v.kind === 'other') {
+        parts.push((p.placeOk ? '📍 Taken at ' : '⚠️ Taken at ') + esc(jobName(v.job)) + ', ' + away + ' from this job' +
+          (p.placeOk ? ' — marked right' : ''));
+        if (can && to) btns.push(moveBtn(p, to, 'Move it to ' + shortName(v.job)));
+        if (can && !p.placeOk) btns.push('<button type="button" class="btn" onclick="jpPlaceOk(\'' + safe(p.id) + '\')">It’s right</button>');
+      } else if (v.kind === 'unknown') {
+        parts.push(v.job ? '📍 Taken at ' + esc(jobName(v.job)) + '. This job’s address isn’t on the map yet, so it can’t be checked'
+          : '📍 This job’s address isn’t on the map yet, so where it was taken can’t be checked');
+        if (can && to) btns.push(moveBtn(p, to, 'Move it to ' + shortName(v.job)));
+      }
+    } else if (seesJobs() && Object.prototype.hasOwnProperty.call(p, 'taken') && t.lat == null) {
+      // Read and found none (his own phone, or one picked on a phone, which
+      // strips it). A photo from before 9 Nov 2026 was never read: nothing said.
+      parts.push('📍 No location in this photo');
+    }
+    const from = p.movedFrom && p.movedFrom.jobId;
+    if (from && seesJobs() && !p.pending) {
+      const was = jobRecord(from);
+      parts.push('↪ Moved here from ' + esc(was ? shortName(was) : 'another job') + (p.movedFrom.at ? ' ' + esc(when(p.movedFrom.at)) : ''));
+      if (can && was && from !== p.jobId && !btns.some(b => b.indexOf('\'' + safe(from) + '\')') > -1)) btns.push(moveBtn(p, from, 'Move it back'));
+    }
+    if (!parts.length) return '';
+    return '<div class="jp-v-place' + (offJob(p, v) ? ' off' : '') + '"><span>' + parts.join(' · ') + '</span>' + btns.join('') + '</div>';
+  }
+  window.jpPlaceOk = id => {
+    const p = photos[id];
+    if (!p || !changesJobs()) return;
+    p.placeOk = { by: myUid(), at: new Date().toISOString() };
+    patch(id, { placeOk: p.placeOk });
+    drawAll(); drawViewer();
+  };
+
+  // Onto the job it was taken at. The files stay where they are in Storage
+  // (their path names the first job; nothing reads the job from it). It takes
+  // the next free number on its new job, given there as on any photo that
+  // comes in without one (numbered). Undo puts it back, number and all: a new
+  // photo always takes the next after the highest, never a freed number, so
+  // its old one is still free (and numbered() settles it if not).
+  window.jpMove = (id, to) => {
+    const p = photos[id];
+    if (!p || !changesJobs() || !to || to === p.jobId) return;
+    const target = jobRecord(to);
+    if (!target) { showToast('That job isn’t on this device'); return; }
+    const from = p.jobId, oldNum = Number.isInteger(p.num) ? p.num : null, wasOk = p.placeOk || null,
+          wasFrom = p.movedFrom || null;
+    const list = ordered(), i = list.findIndex(x => x.id === id);
+    const next = list[i + 1] || list[i - 1];
+    // "It's right" was said about its old job, so it goes with the move.
+    // Moved back where it came from, it is home again: no "moved here" left.
+    // Home again it takes back the number it had there ("photo 7" in a chat
+    // about that job still means it).
+    const home = !!(p.movedFrom && p.movedFrom.jobId === to);
+    const homeNum = home && Number.isInteger(p.movedFrom.num) ? p.movedFrom.num : null;
+    patch(id, { jobId: to, num: homeNum, placeOk: null,
+                movedFrom: home ? null : { jobId: from, num: oldNum, at: new Date().toISOString(), by: myUid() } });
+    delete photos[id];
+    if (viewing === id) { if (next) { viewing = next.id; drawViewer(); } else jpClose(); }
+    drawAll();
+    if (window.YDJobView) YDJobView.draw();
+    const name = String(target.customerName || 'that job').trim() || 'that job';
+    if (typeof showUndo === 'function') showUndo('Photo moved to ' + name, () => patch(id, { jobId: from, num: oldNum, placeOk: wasOk, movedFrom: wasFrom }), 9000);
+    else showToast('Photo moved to ' + name);
   };
 
   // A file that may already be up from an earlier try: storage.rules lets a
@@ -221,6 +359,8 @@
       jobId: item.jobId, stage: item.stage, caption: '',
       path: base + '.jpg', thumbPath: base + '_t.jpg', url: item.url, thumbUrl: item.thumbUrl,
       w: item.w, h: item.h, by: item.by, byName: item.byName, at: item.at, deleteAsked: null,
+      // A photo waiting on a phone since before 9 Nov 2026 has none.
+      taken: takenRec(item.taken),
     };
     if (Number.isInteger(item.num)) rec.num = item.num;     // left off when not known yet (never undefined)
     Promise.resolve(window.YDDb.put('jobPhotos', item.id, rec)).catch(e => {
@@ -338,13 +478,14 @@
     keepNumbers(list, num);
     return list.map(p => Object.assign(p, { num: num[p.id] })).sort(byTaken);
   }
-  function thumbHtml(p) {
+  function thumbHtml(p, ctx) {
     const st = status[p.id] || {};
     const src = p.pending ? st.preview : p.thumbUrl;
     const note = p.pending
       ? (busy[p.id] ? '<span class="jp-sending" data-jp-progress="' + safe(p.id) + '">Sending ' + Math.round((st.progress || 0) * 100) + '%</span>'
         : '<span class="jp-sending jp-wait">' + esc(st.error || 'Waiting for signal') + '</span>')
-      : (p.deleteAsked ? '<span class="jp-asked">🗑 Delete?</span>' : '');
+      : p.deleteAsked ? '<span class="jp-asked">🗑 Delete?</span>'
+      : offJob(p, placeOf(p, ctx)) ? '<span class="jp-asked jp-off">📍 Wrong job?</span>' : '';
     // ro-ok: looking at a photo still works on a look-only Job screen (the
     // viewer offers changes only to whoever may make them).
     return '<button type="button" class="jp-thumb ro-ok" onclick="jpOpen(\'' + safe(p.id) + '\')" aria-label="Photo ' + p.num + '">' +
@@ -361,16 +502,19 @@
     }
     if (!signedIn()) { container.innerHTML = ''; return; }
     const list = ordered();
+    const ctx = placeCtx(id);
     const asked = list.filter(p => p.deleteAsked && !p.pending).length;
+    const off = ctx ? list.filter(p => offJob(p, placeOf(p, ctx))).length : 0;
     const groups = STAGES.map(([k, name]) => {
       const mine = list.filter(p => p.stage === k);
       return mine.length ? '<div class="jp-stage"><div class="jp-stage-h"><span class="jp-chip jp-' + k + '">' + name + '</span> ' +
-        mine.length + '</div><div class="jp-grid">' + mine.map(thumbHtml).join('') + '</div></div>' : '';
+        mine.length + '</div><div class="jp-grid">' + mine.map(p => thumbHtml(p, ctx)).join('') + '</div></div>' : '';
     }).join('');
     // On the Job tab the section already says Photos; there only the count.
     const inSection = container.id === 'jobPhotosBody';
     const count = list.length ? (inSection ? list.length + ' photo' + (list.length === 1 ? '' : 's') : ' · ' + list.length) : '';
-    const askedHtml = asked && changesJobs() ? ' <span class="jp-asked-n">' + asked + ' asked to be deleted</span>' : '';
+    const askedHtml = (asked && changesJobs() ? ' <span class="jp-asked-n">' + asked + ' asked to be deleted</span>' : '') +
+      (off ? ' <span class="jp-asked-n">' + off + ' may be on the wrong job</span>' : '');
     // The three Add buttons are put back as they were, not drawn again: the
     // list redraws whenever an upload starts or ends or a teammate's photo
     // comes in, and a new file box in place of the one the camera was opened
@@ -432,6 +576,7 @@
         '<span class="jp-v-who">📷 ' + esc(p.pending ? (p.byName || 'Me') : nameOf(p)) + ' · ' + esc(when(p.at)) + '</span>' +
         '<button type="button" class="jp-v-x" onclick="jpClose()" aria-label="Close">&times;</button>' +
       '</div>' +
+      placeHtml(p, placeOf(p, placeCtx(p.jobId))) +
       '<div class="jp-v-img">' +
         (i > 0 ? '<button type="button" class="jp-v-nav jp-v-prev" onclick="jpNav(-1)" aria-label="Previous">‹</button>' : '') +
         (src ? '<img src="' + esc(src) + '" alt="">' : '') +

@@ -3030,6 +3030,13 @@
   .jp-v-stages { display:inline-flex; border:1px solid rgba(255,255,255,.5); border-radius:8px; overflow:hidden; }
   .jp-v-stage { background:none; border:none; color:#fff; padding:9px 13px; font-weight:700; font-size:13px; cursor:pointer; min-height:40px; }
   .jp-v-stage.on { background:#fff; color:#2b2433; }
+  /* When and where a photo was taken (photoplace.js), under the viewer's top;
+     a photo taken away from its job reads in amber, with Move beside it. */
+  .jp-v-place { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:0 14px 8px; font-size:13px; opacity:.9; }
+  .jp-v-place > span { flex:1 1 220px; min-width:0; }
+  .jp-v-place.off { opacity:1; color:#ffd27a; }
+  .jp-v-place .btn { color:#fff; border-color:rgba(255,255,255,.6); min-height:40px; display:inline-flex; align-items:center; }
+  .jp-thumb .jp-off { background:rgba(168,118,31,.92); right:32px; }
   /* Services & how they're priced (estimate.js serviceHtml) */
   .pb-card { border:1px solid var(--border); border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:8px; background:var(--surface); }
   .pb-card .pb-top select { width:auto; }
