@@ -6363,3 +6363,28 @@ html[data-bids-page] #panel-boards .section-head { display: none; }
   .pin-map { height: max(200px, calc(100vh - 470px)); height: max(200px, calc(100dvh - 470px)); min-height: 200px; }
   .pin-tools .btn { flex: 1 1 calc(50% - 8px); justify-content: center; }
 }
+
+/* A shift's day and time side by side in the clock's change forms
+   (timeclock.js spanBoxesHtml): Started on one line, Finished under it, so
+   both boxes fit on a phone and nothing is squeezed on a laptop. */
+/* minmax(0, ...) and min-width 0: a date box's own width otherwise holds the
+   column open past a phone's card. */
+.grid.tc-span { grid-template-columns:minmax(0, 1fr); gap:10px; }
+.tc-span .field { min-width:0; }
+.tc-when { display:flex; gap:8px; max-width:420px; min-width:0; }
+.tc-when input { min-width:0; width:auto; }
+.tc-when input[type=date] { flex:1.3 1 0; }
+.tc-when input[type=time] { flex:1 1 0; }
+/* On a phone the two only fit with less padding and no clock icon in the
+   time box ("07:00 AM" was cut to "07:0"); a click anywhere in a time box
+   opens its list anyway (app.js). The narrowest phones stack them. */
+@media (max-width:720px) {
+  .tc-when { gap:6px; }
+  .tc-when input { padding-left:8px; padding-right:8px; }
+  .tc-when input[type=date]::-webkit-calendar-picker-indicator { margin-left:2px; }
+  .tc-when input[type=time]::-webkit-calendar-picker-indicator { display:none; }
+}
+@media (max-width:359px) {
+  .tc-when { flex-wrap:wrap; }
+  .tc-when input[type=date], .tc-when input[type=time] { flex:1 1 100%; }
+}

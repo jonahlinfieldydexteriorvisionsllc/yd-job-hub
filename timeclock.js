@@ -1802,7 +1802,7 @@
           // middle one says just "Change" there, so all three fit.
           ? '<div class="appr-act appr-act3">' +
               '<button class="btn btn-filled btn-sm" onclick="approveShift(\'' + safeId(e.id) + '\')">Approve</button>' +
-              '<button class="btn btn-sm" onclick="fixTimes(\'' + safeId(e.id) + '\')" aria-label="Change times">Change<span class="appr-long"> times</span></button>' +
+              '<button class="btn btn-sm" onclick="fixTimes(\'' + safeId(e.id) + '\')" aria-label="Change the day or time">Change<span class="appr-long"> day or time</span></button>' +
               '<button class="btn btn-sm" onclick="rejectShift(\'' + safeId(e.id) + '\')">Reject</button>' +
             '</div>'
           : '<div class="appr-act muted">' + (decides() ? 'Your own shift — the owner approves it' : 'Waiting for the owner') + '</div>') +
@@ -1841,6 +1841,7 @@
     if (!e || !mayDecide(e) || running(e)) return;
     fixingId = id;
     fixingIn = workerUid && el('workerModal') && el('workerModal').classList.contains('active') ? 'worker' : 'appr';
+    spanForget('fx');
     render();
     const box = el('fxEnd');
     if (box && box.focus) box.focus();
@@ -1851,32 +1852,32 @@
     const a = document.activeElement;
     if (a && a.closest && a.closest('#fxForm') && a.blur) a.blur();
   };
-  window.cancelFixTimes = function () { leaveForm(); fixingId = null; fixingIn = null; render(); };
+  window.cancelFixTimes = function () { leaveForm(); fixingId = null; fixingIn = null; spanForget('fx'); render(); };
   function fixHtml(e) {
     const id = safeId(e.id);
     return '<div class="add-area wk-ask" id="fxForm">' +
-      '<div class="add-label">Change the times — ' + esc(workerOf(e)) + ', ' + spanWords(e) + '</div>' +
-      '<div class="grid g2">' +
-        '<div class="field"><span class="label">Started</span><input type="time" id="fxStart" value="' + hm(e.startedAt) + '"></div>' +
-        '<div class="field"><span class="label">Finished</span><input type="time" id="fxEnd" value="' + hm(e.endedAt) + '"></div>' +
-      '</div>' +
-      '<div class="hint">Each time lands on the day nearest the one it replaces, so a night shift past midnight stays one shift.</div>' +
-      '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="saveFixTimes(\'' + id + '\')">Save the times</button>' +
+      '<div class="add-label">Change the day or times — ' + esc(workerOf(e)) + ', ' + spanWords(e) + '</div>' +
+      spanBoxesHtml('fx', e, 'Started', 'Finished') +
+      '<div class="hint">Pick another day to move the shift; the end moves with it.</div>' +
+      '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="saveFixTimes(\'' + id + '\')">Save</button>' +
         '<button class="btn btn-sm" onclick="cancelFixTimes()">Cancel</button></div>' +
     '</div>';
   }
   window.saveFixTimes = async function (id) {
     const e = entries[id] || older[id];
-    if (!e || !mayDecide(e) || running(e)) { leaveForm(); fixingId = null; fixingIn = null; render(); return; }
-    const t = shiftTimes(e, (el('fxStart') || {}).value, (el('fxEnd') || {}).value);
-    if (!t) { showToast('Put in both times'); return; }
-    if (ms(t.end) > Date.now() + 60000) { showToast('That ends in the future — check the times'); return; }
-    if (ms(t.start) === ms(e.startedAt) && ms(t.end) === ms(e.endedAt)) { leaveForm(); fixingId = null; fixingIn = null; render(); return; }
+    if (!e || !mayDecide(e) || running(e)) { leaveForm(); fixingId = null; fixingIn = null; spanForget('fx'); render(); return; }
+    const t = spanRead('fx', e);
+    if (t.error) { showToast(t.error); if (t.stale) { leaveForm(); render(); } return; }
+    if (ms(t.end) > Date.now() + 60000) { showToast('That ends in the future — check the day and times'); return; }
+    if (ms(t.start) === ms(e.startedAt) && ms(t.end) === ms(e.endedAt)) { cancelFixTimes(); return; }
     if (e.rateCents == null && counts(e) && !ratesReady()) { ratesWait(); return; }
     const patch = { startedAt: t.start, startedMs: ms(t.start), endedAt: t.end, endedMs: ms(t.end) };
     if (ms(t.end) - ms(t.start) > 20 * 3600000 &&
         !(await ydConfirm('That makes it ' + fmtDur(ms(t.end) - ms(t.start)) + ' long.', { title: 'Keep those times?', ok: 'Keep them', cancel: 'Change them' }))) return;
     if (fixingId !== e.id || running(e)) return;          // closed or changed while asked
+    const clash = newOverlap(e, ms(t.start), ms(t.end));
+    if (clash && !(await overlapAsk(clash, false))) return;
+    if (fixingId !== e.id || running(e)) return;
     const next = Object.assign({}, e, patch);
     // A settled shift's figures follow its new length, at the rate it was
     // settled at (or theirs now, if it never was).
@@ -1890,14 +1891,15 @@
     Object.assign(e, patch);
     patchOlder(e.id, patch);
     leaveForm();
-    fixingId = null; fixingIn = null;
+    fixingId = null; fixingIn = null; spanForget('fx');
     write(e.id, patch, 'changing the times');
     // From before the clock's cutoff, then or now, and counted: the summary
     // of old jobs' labour no longer adds up (after the shift's own write).
     if ((wasOld || isOld(e)) && counts(e)) markStale();
     render();
     if (typeof refreshJobLabour === 'function') refreshJobLabour();
-    showToast('Times changed — ' + fmtDur(paidMs(e)) + (awaitingOwner(e) ? '. Approve it when it looks right.' : ''));
+    // The day said too, so a shift moved to another day reads where it went.
+    showToast('Changed to ' + spanWords(e) + ' — ' + fmtDur(paidMs(e)) + (awaitingOwner(e) ? '. Approve it when it looks right.' : ''));
   };
 
   const money = c => '$' + (c / 100).toLocaleString('en-US',
@@ -2811,8 +2813,8 @@
     const m = el('workerModal');
     if (m) m.classList.remove('active');
     workerUid = null;
-    asking = null;
-    if (fixingIn === 'worker') { fixingId = null; fixingIn = null; }
+    asking = null; spanForget('cr');
+    if (fixingIn === 'worker') { fixingId = null; fixingIn = null; spanForget('fx'); }
   };
 
   function renderWorker(forceBar) {
@@ -2990,19 +2992,121 @@
     });
     return best;
   }
-  function shiftTimes(e, startTime, endTime) {
-    // A time left as it was is the time it was, to the second: the boxes
-    // show whole minutes, and reading them back moved an untouched start
-    // or end by up to a minute -- so "no change" was never seen as one.
-    const same = (iso, time) => !!iso && hm(iso) === String(time || '') ? new Date(iso) : null;
-    const start = same(e.startedAt, startTime) || nearTime(e.startedAt, startTime);
-    let end = start && (same(e.endedAt, endTime) || nearTime(e.endedAt || e.startedAt, endTime));
-    if (!start || !end) return null;
-    while (end <= start) end.setDate(end.getDate() + 1);
-    while (end - start > 24 * 3600000) end.setDate(end.getDate() - 1);
-    if (end <= start) return null;
+  // ------------------------------------- a shift's days and times, typed in
+  //
+  // Jonah, 9 Nov 2026: "i can change the times but not the dates". Each end
+  // of a shift is a day box and a time box. The days follow the times by
+  // themselves until somebody picks one, so typing only times works as it
+  // always did -- a start moved past midnight lands on the day nearest the
+  // one it replaces (nearTime), an end before the start is the next morning
+  // -- but the day is now on screen, and a day picked by hand is never moved
+  // for them. Moving the start to another day takes the end with it, so the
+  // shift moves whole. 'fx' is the office's form, 'cr' the crew's.
+  const ymd = d => d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
+  const dayOfIso = iso => { const d = new Date(iso); return iso && !isNaN(d) ? ymd(d) : ''; };
+  // "7:05" or "07:05:00" as "07:05"; '' when it isn't a time.
+  const hhmm = t => { const m = /^(\d{1,2}):(\d{2})/.exec(String(t || '')); return m && +m[1] < 24 ? two(+m[1]) + ':' + m[2] : ''; };
+  // A day and a time typed in, as a moment on this device's clock.
+  function localAt(day, time) {
+    const t = hhmm(time);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) || !t) return null;
+    const d = new Date(day + 'T' + t);
+    return isNaN(d) ? null : d;
+  }
+  // Days counted on the calendar, at noon, so a night the clocks change on
+  // is still one day.
+  const addDays = (day, n) => { const d = localAt(day, '12:00'); if (!d) return day; d.setDate(d.getDate() + n); return ymd(d); };
+  const daysApart = (a, b) => { const x = localAt(a, '12:00'), y = localAt(b, '12:00'); return x && y ? Math.round((y - x) / 86400000) : 0; };
+  // The end's own day, going by the times: the start's day, or the next one
+  // when it finishes at or before the time it started.
+  const endFollows = (sd, st, et) => (sd && st && et && et <= st ? addDays(sd, 1) : sd);
+
+  // What is typed so far, per form, so a redraw for somebody else's clock-in
+  // can't put the boxes back to the shift's old times.
+  const spanDraft = {};
+  function spanStart(p, e) {
+    const d = spanDraft[p];
+    // The same shift as it was when the form opened: what is typed stays.
+    if (d && d.id === e.id && d.sIso === e.startedAt && d.eIso === (e.endedAt || null)) return d;
+    const sd = dayOfIso(e.startedAt), st = hhmm(hm(e.startedAt));
+    const et = e.endedAt ? hhmm(hm(e.endedAt)) : '', ed = e.endedAt ? dayOfIso(e.endedAt) : sd;
+    // An end that isn't where the times alone would put it (a shift of more
+    // than a day) is held where it is, as if picked by hand.
+    return (spanDraft[p] = { id: e.id, sIso: e.startedAt, eIso: e.endedAt || null, sd: sd, st: st, ed: ed, et: et,
+      sdHand: false, edHand: !!et && ed !== endFollows(sd, st, et) });
+  }
+  const spanForget = p => { delete spanDraft[p]; };
+  function spanBoxesHtml(p, e, startWord, endWord) {
+    const d = spanStart(p, e), today = ymd(new Date());
+    const box = (which, word, day, time) =>
+      '<div class="field"><span class="label">' + word + '</span><div class="tc-when">' +
+        '<input type="date" id="' + p + which + 'Day" value="' + esc(day) + '" max="' + today + '" aria-label="' + word + ', the day"' +
+          ' onchange="tcSpanTyped(\'' + p + '\')">' +
+        '<input type="time" id="' + p + which + '" value="' + esc(time) + '" aria-label="' + word + ', the time"' +
+          ' onchange="tcSpanTyped(\'' + p + '\')">' +
+      '</div></div>';
+    return '<div class="grid g2 tc-span">' + box('Start', startWord, d.sd, d.st) + box('End', endWord, d.ed, d.et) + '</div>';
+  }
+  // The boxes read into the draft, and the days that follow put right on
+  // screen. Run on every change and again on Save, so a change the browser
+  // never announced is still caught.
+  function spanSync(p) {
+    const d = spanDraft[p];
+    if (!d) return null;
+    const box = id => el(p + id);
+    if (!box('StartDay') || !box('EndDay') || !box('Start') || !box('End')) return d;
+    const sd = String(box('StartDay').value || ''), ed = String(box('EndDay').value || '');
+    const st = hhmm(box('Start').value), et = hhmm(box('End').value);
+    const edNow = ed !== d.ed;
+    if (edNow) d.edHand = true;
+    if (sd !== d.sd) {
+      d.sdHand = true;
+      // The end keeps its distance from the start when it was picked too.
+      if (d.edHand && !edNow && sd && d.sd && d.ed) d.ed = addDays(d.ed, daysApart(d.sd, sd));
+      d.sd = sd;
+    }
+    if (edNow) d.ed = ed;
+    d.st = st; d.et = et;
+    if (!d.sdHand && st) {
+      const near = nearTime(d.sIso, st);
+      if (near) d.sd = ymd(near);
+    }
+    if (!d.edHand) d.ed = endFollows(d.sd, d.st, d.et);
+    if (box('StartDay').value !== d.sd) box('StartDay').value = d.sd;
+    if (box('EndDay').value !== d.ed) box('EndDay').value = d.ed;
+    return d;
+  }
+  window.tcSpanTyped = function (p) { spanSync(p); };
+  // The two moments a form says, or what's wrong with it.
+  function spanRead(p, e) {
+    const d = spanSync(p);
+    // Changed on another device while the form was open: saving would put
+    // the old times back over that change, so the form starts again from it.
+    if (d && (d.id !== e.id || d.sIso !== e.startedAt || d.eIso !== (e.endedAt || null))) {
+      spanForget(p);
+      return { error: 'That shift was just changed somewhere else — check it and try again', stale: true };
+    }
+    if (!d || !d.sd || !d.st || !d.ed || !d.et) return { error: 'Put in both days and both times' };
+    // A day and time left as they were is the moment it was, to the second:
+    // the boxes show whole minutes, and reading them back moved an untouched
+    // start or end by up to a minute -- so "no change" was never seen as one.
+    const keep = (iso, day, time) => (iso && dayOfIso(iso) === day && hhmm(hm(iso)) === time ? new Date(iso) : localAt(day, time));
+    const start = keep(e.startedAt, d.sd, d.st), end = keep(e.endedAt, d.ed, d.et);
+    if (!start || !end) return { error: 'Those times did not make sense' };
+    if (end <= start) return { error: 'It finishes before it starts — check the days' };
     return { start: start.toISOString(), end: end.toISOString() };
   }
+  // Another shift of the same person that the new times run into and the old
+  // ones didn't: most likely the day it was moved to already has its shift.
+  function newOverlap(e, s, en) {
+    const now = Date.now();
+    const over = (x, a, b) => startMsOf(x) < b && (endMsOf(x) != null ? endMsOf(x) : now) > a;
+    const was = [startMsOf(e), endMsOf(e) != null ? endMsOf(e) : now];
+    return Object.values(known()).find(x => x && x.id !== e.id && x.uid === e.uid && x.status !== 'rejected' &&
+      over(x, s, en) && !over(x, was[0], was[1])) || null;
+  }
+  const overlapAsk = (x, mine, back) => ydConfirm('It runs into another shift ' + (mine ? 'of yours' : 'of theirs') + ': ' +
+    spanWords(x) + ', ' + whereOf(x) + '.', { title: 'Already on the clock then', ok: 'Keep it anyway', cancel: back || 'Change it' });
   // "Tue 10/6 11:40 PM" -- a request's times always carry their day, so a
   // change that crosses midnight cannot look like the same day's shift.
   const dayTime = iso => {
@@ -3016,10 +3120,7 @@
     return '<div class="add-area wk-ask">' +
       '<div class="add-label">' + (own ? 'Change' : 'Ask for a change to') + ' ' + new Date(e.startedAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
         ' · ' + esc(whereOf(e)) + ' (' + clockTime(e.startedAt) + '–' + clockTime(e.endedAt) + ')</div>' +
-      '<div class="grid g2">' +
-        '<div class="field"><span class="label">Should have started</span><input type="time" id="crStart" value="' + hm(e.startedAt) + '"></div>' +
-        '<div class="field"><span class="label">Should have ended</span><input type="time" id="crEnd" value="' + hm(e.endedAt) + '"></div>' +
-      '</div>' +
+      spanBoxesHtml('cr', e, 'Should have started', 'Should have ended') +
       '<div class="field"><span class="label">Why' + (own ? ' (if you like)' : '') + '</span><input id="crWhy" placeholder="e.g. forgot to clock out at the shop"></div>' +
       '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="sendRequest()">' +
         (own ? 'Save the change' : 'Send to the office') + '</button>' +
@@ -3033,10 +3134,15 @@
     return '<div class="wk-head">Changes you asked for</div>' + mineR.map(r => {
       // Its one status, with when and who: "✓ Approved 10/14 · Jonah".
       const st = window.YDStages.request(r);
+      const b = r.before || {}, a = r.after || {};
+      const md = iso => new Date(iso).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
+      // Asked to move it to another day: the new day is said too, or the
+      // line read the same times on both sides as if nothing changed.
+      const moved = a.startedAt && b.startedAt && dayOfIso(a.startedAt) !== dayOfIso(b.startedAt);
       return '<div class="wk-req ' + esc(st.id) + '">' +
-        new Date((r.before || {}).startedAt || r.createdAt).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) + ': ' +
-        clockTime((r.before || {}).startedAt) + '–' + clockTime((r.before || {}).endedAt) + ' → ' +
-        clockTime((r.after || {}).startedAt) + '–' + clockTime((r.after || {}).endedAt) + ' ' +
+        md(b.startedAt || r.createdAt) + ': ' +
+        clockTime(b.startedAt) + '–' + clockTime(b.endedAt) + ' → ' + (moved ? md(a.startedAt) + ' ' : '') +
+        clockTime(a.startedAt) + '–' + clockTime(a.endedAt) + ' ' +
         window.YDStages.chip(st, { nameOf: uid => uid === (me() || {}).uid ? 'you' : whoIsKnown(uid) }) +
         (st.id === 'waiting' ? ' <button class="link-btn" onclick="withdrawRequest(\'' + safeId(r.id) + '\')">withdraw</button>' : '') +
         (st.why ? '<div class="rq-why">Why not: ' + esc(st.why) + '</div>' : '') +
@@ -3050,21 +3156,25 @@
   // page from the shift tapped: brought to the middle of the screen.
   window.askChange = function (id) {
     asking = id;
+    spanForget('cr');
     renderWorker();
     const f = document.querySelector('#workerBody .wk-ask');
     if (f && f.scrollIntoView) f.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
-  window.cancelRequest = function () { asking = null; renderWorker(); };
-  window.sendRequest = function () {
+  window.cancelRequest = function () { asking = null; spanForget('cr'); renderWorker(); };
+  window.sendRequest = async function () {
     const e = entries[asking] || older[asking], u = me();
     if (!e || !u || e.uid !== u.uid) return;
-    const t = shiftTimes(e, (el('crStart') || {}).value, (el('crEnd') || {}).value);
-    const start = t && t.start, end = t && t.end;
+    const t = spanRead('cr', e);
     const why = ((el('crWhy') || {}).value || '').trim();
-    if (!start || !end) { showToast('Put in both times'); return; }
+    if (t.error) { showToast(t.error); if (t.stale) renderWorker(); return; }
+    const start = t.start, end = t.end;
     if (!why && !settlesOwn(e)) { showToast('Say why, so the office knows'); return; }
-    if (start === e.startedAt && end === e.endedAt) { showToast('Those are the times it has now'); return; }
-    if (ms(end) - ms(start) > 20 * 3600000) { showToast('That is longer than a day — check the times'); return; }
+    if (ms(start) === ms(e.startedAt) && ms(end) === ms(e.endedAt)) { showToast('Those are the day and times it has now'); return; }
+    if (ms(end) - ms(start) > 20 * 3600000) { showToast('That is longer than a day — check the day and times'); return; }
+    if (ms(end) > Date.now() + 2 * 60000) { showToast('It cannot end in the future'); return; }
+    const clash = newOverlap(e, ms(start), ms(end));
+    if (clash && (!(await overlapAsk(clash, true)) || asking !== e.id)) return;
     if (settlesOwn(e)) { changeOwn(e, start, end, why); return; }
     const id = 'cr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const rec = { type: 'timeEntry', targetPath: 'timeEntries/' + e.id, targetId: e.id,
@@ -3072,7 +3182,7 @@
       before: { startedAt: e.startedAt, endedAt: e.endedAt || null },
       after: { startedAt: start, endedAt: end }, createdAt: nowIso() };
     requests[id] = Object.assign({ id: id }, rec);
-    asking = null;
+    asking = null; spanForget('cr');
     writeRequest(id, rec, 'asking for a change');
     renderWorker();
     showToast('Sent — the office will look at it');
@@ -3097,7 +3207,7 @@
     };
     Object.assign(e, patch);
     patchOlder(e.id, patch);
-    asking = null;
+    asking = null; spanForget('cr');
     write(e.id, patch, 'changing their own shift');
     renderWorker();
     showToast('Changed — ' + fmtDur(paidMs(e)) + ', counted');
@@ -3170,7 +3280,10 @@
       .catch(() => showToast('That shift could not be read — try again with a signal'))
       .then(() => deciding.delete(r.id));
   };
-  function applyRequest(r, e) {
+  // Requests whose "runs into another shift" question is up, so a second tap
+  // on Approve meanwhile doesn't ask twice.
+  const overlapAsking = new Set();
+  async function applyRequest(r, e) {
     const id = r.id;
     if (!isWaiting(r)) return;      // decided meanwhile
     if (!e) { showToast('That shift is no longer there'); return; }
@@ -3189,6 +3302,17 @@
     const next = Object.assign({}, e, patch);
     if (!(ms(next.endedAt) > ms(next.startedAt))) { showToast('Those times end before they start'); return; }
     if (e.rateCents == null && (e.status === 'approved' || e.status === 'ok') && !ratesReady()) { ratesWait(); return; }
+    // Moved onto a day they already have a shift (checked when they asked
+    // too, but one may have been added since).
+    const clash = newOverlap(e, ms(next.startedAt), ms(next.endedAt));
+    if (clash) {
+      if (overlapAsking.has(id)) return;
+      overlapAsking.add(id);
+      let keep = false;
+      try { keep = await overlapAsk(clash, false, 'Go back'); } finally { overlapAsking.delete(id); }
+      const now = entries[e.id] || older[e.id] || e;
+      if (!keep || !isWaiting(r) || ms(now.startedAt) !== ms(e.startedAt) || ms(now.endedAt || 0) !== ms(e.endedAt || 0)) return;
+    }
     // The hours and pay stamped on it are worked out again, at the rate it
     // was settled at (or theirs now, if it never was).
     if (e.rateCents != null || e.status === 'approved' || e.status === 'ok') {
@@ -3275,8 +3399,11 @@
     if (!c || !c.at) return '';
     const b = c.before || {};
     const mine = e.uid === (me() || {}).uid;
+    // Moved from another day: that day is said, not just its times.
+    const wasDay = b.startedAt && dayOfIso(b.startedAt) !== dayOfIso(e.startedAt)
+      ? new Date(b.startedAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) + ' ' : '';
     return '<span class="shift-pause">✎ Changed by ' + esc(mine ? 'you' : workerOf(e)) + ' ' + esc(sinceWords(c.at)) +
-      (b.startedAt ? ' — was ' + clockTime(b.startedAt) + '–' + (b.endedAt ? clockTime(b.endedAt) : '?')
+      (b.startedAt ? ' — was ' + wasDay + clockTime(b.startedAt) + '–' + (b.endedAt ? clockTime(b.endedAt) : '?')
         : c.kind === 'long' ? ' — a day over ' + LONG_SHIFT_HOURS + ' hours, counted without asking' : ' — typed in') +
       (c.why ? ': “' + esc(c.why) + '”' : '') + '</span>';
   }
@@ -3292,7 +3419,7 @@
     }
     if (fixable) {
       return running(e) || !e.endedAt || e.status === 'rejected' || !mayDecide(e) ? ''
-        : '<button class="' + cls + '" onclick="fixTimes(\'' + safeId(e.id) + '\')">Change times</button>';
+        : '<button class="' + cls + '" onclick="fixTimes(\'' + safeId(e.id) + '\')">Change day or time</button>';
     }
     return '';
   }
