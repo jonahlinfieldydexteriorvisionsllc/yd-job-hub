@@ -801,12 +801,21 @@
   // shop (Pricing rules → shop address), looked up by themselves.
   // own: the job's own days stand in for crew-days (one accepted in
   // QuickBooks has none) -- what the problem says when there are none.
+  // autoDays: a number of days, each a whole day on site; or the trips
+  // counted off the clock (tripDays: {full, small}), where a small trip is
+  // one truck there and back and no loader. Days typed on the estimate are
+  // all whole days.
   function fuel(est, ctx, autoDays, own) {
     const r = ctx.rules, f = est.fuel || {}, rf = r.fuel || {}, prices = ctx.fuel || {};
-    const out = { clientCents: 0, problems: [], miles: num(f.miles), days: first(f.jobDays, autoDays),
+    const split = autoDays && typeof autoDays === 'object' ? autoDays : null;
+    const out = { clientCents: 0, problems: [], miles: num(f.miles),
+                  days: first(f.jobDays, split ? (split.full || 0) + (split.small || 0) : autoDays),
+                  fullDays: null, smallDays: 0,
                   bobcatDays: null, gasCents: first(f.gasCents, prices.gasCents),
                   dieselCents: first(f.dieselCents, prices.dieselCents), gallonsPerDay: 0 };
-    out.bobcatDays = first(f.bobcatDays, out.days);
+    if (split && num(f.jobDays) === null) { out.fullDays = split.full || 0; out.smallDays = split.small || 0; }
+    else out.fullDays = out.days;
+    out.bobcatDays = first(f.bobcatDays, out.fullDays);
     if ((est.off || {}).fuel) return out;
     if (out.miles === null) { out.problems.push('miles to the job not known yet'); return out; }
     if (!(out.days > 0)) {
@@ -818,7 +827,9 @@
     if (!mpg.length) { out.problems.push('truck mpg not set'); return out; }
     const rt = out.miles * 2;
     out.gallonsPerDay = mpg.reduce((s, m) => s + rt / m, 0);
-    let cents = out.gallonsPerDay * out.gasCents * out.days;
+    // A small trip: one truck, an average one of his.
+    out.gallonsPerTrip = out.gallonsPerDay / mpg.length;
+    let cents = (out.gallonsPerDay * out.fullDays + out.gallonsPerTrip * out.smallDays) * out.gasCents;
     const bob = num(rf.bobcatGalPerDay);
     if (bob > 0 && out.bobcatDays > 0) {
       if (out.dieselCents === null) out.problems.push('no diesel price');
@@ -828,6 +839,39 @@
     out.costCents = Math.round(cents);
     out.clientCents = Math.round(cents * (1 + pct(rf.markupPct)));
     return out;
+  }
+
+  // The trips to a job, day by day: gas is never matched to receipts, it is
+  // the drive there and back for each day someone went (Jonah, 10 Nov 2026:
+  // "we dont have to match receipts for gas. we just assume a cost of gas for
+  // a job" -- "some days ill send someone over there to do something small").
+  // A day the crew put in at least half a crew-day's hours there is a whole
+  // day: every truck and the loader, as an estimate counts one. A shorter
+  // visit is a small trip: one truck there and back. With no crew-day hours
+  // set, a day with two people or more is a whole day.
+  //   days: [{ day, hours, people, planned }] -- planned: a day still ahead on
+  //   the Job schedule, a whole day by plan.
+  //   dayHours: the job's crew-day hours (crewHours).
+  // { full, small }
+  function tripDays(days, dayHours) {
+    const out = { full: 0, small: 0 };
+    (days || []).forEach(d => {
+      if (!d) return;
+      const whole = d.planned || (dayHours > 0 ? (num(d.hours) || 0) >= dayHours / 2 - 1e-6 : (num(d.people) || 0) >= 2);
+      if (whole) out.full++; else out.small++;
+    });
+    return out;
+  }
+
+  // What a job's trips cost in gas, at cost (jobcosts.js, the actual side):
+  // the estimate's miles and gas prices -- what the bid assumed -- over the
+  // trips made. The days and loader days typed on the estimate are the bid's,
+  // not what happened, so they are left out.
+  //   trips: { full, small } (tripDays). The fuel() result.
+  function tripFuel(est, trips) {
+    const e = Object.assign({}, est || {});
+    e.fuel = Object.assign({}, (est && est.fuel) || {}, { jobDays: null, bobcatDays: null });
+    return fuel(e, { rules: rules, fuel: fuelPrices }, trips || { full: 0, small: 0 }, true);
   }
 
   // ------------------------------------------------------------------ labour
@@ -1134,7 +1178,11 @@
     // site (fuel) and what the profit per day is counted over.
     const crewDays = work.reduce((s, w) => s + (w.crewDays || 0), 0);
     const crewTrips = crewDays > 0 ? Math.ceil(trim(crewDays)) : null;
-    const fu = fixed ? fuel(est, ctx, num(ctx.jobDays) > 0 ? num(ctx.jobDays) : crewTrips, true) : fuel(est, ctx, crewTrips);
+    // ctx.jobDays: the job's own trips ({full, small}, estimate.js tripsOf), or
+    // a number of whole days.
+    const jd = ctx.jobDays, jobTrips = jd && typeof jd === 'object' ? ((jd.full || 0) + (jd.small || 0) > 0 ? jd : null)
+      : num(jd) > 0 ? num(jd) : null;
+    const fu = fixed ? fuel(est, ctx, jobTrips !== null ? jobTrips : crewTrips, true) : fuel(est, ctx, crewTrips);
     const materialsCents = fixed ? est.fromQb.materialsCents
       : all.reduce((s, l) => s + l.clientCents, 0) + del.clientCents + fu.clientCents;
     const laborCents = work.reduce((s, w) => s + w.cents, 0);
@@ -2536,6 +2584,8 @@
     byLine,
     // What bringing a job's order costs (estimate.js orderDelivery): the same sums.
     deliveries,
+    // The trips to a job and what they cost in gas (estimate.js, jobcosts.js).
+    tripDays, tripFuel,
     // One material on a change order (changeorders.js): what an estimate
     // would charge the customer for it, markup and waste by its kind, and
     // whether it is taxed -- by its kind, and one taxed "as the job is" by the

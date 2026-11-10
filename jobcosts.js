@@ -29,8 +29,10 @@
 //              rates) is shown beside it.
 //   purchases  the job's Materials & Purchases -- receipt lines and lines
 //              typed in -- sorted into materials, delivery, dumpsters &
-//              rentals, fuel, subcontractors and other by what the receipt
+//              rentals, subcontractors and other by what the receipt
 //              was (its kind) and the words on the line (bucketOfLine).
+//   fuel       never receipts: the gas for each trip someone made to the job,
+//              off the clock (tripsFuel; 10 Nov 2026).
 //   subs       what linked subcontractor properties have charged this season
 //              (subs.js forJob, owner only).
 //   price      the Job Price (with any add-ons); the QuickBooks invoice and
@@ -137,8 +139,21 @@
       const t = bySplit[p.m.splitId || p.m.receiptId] || {};
       p.bucket = Object.keys(t).sort((a, b) => t[b] - t[a])[0] || 'materials';
     });
+    // A fuel line on a receipt that isn't for gas -- a supplier's "Fuel
+    // surcharge 10%" -- is part of what that supplier charged, so it goes
+    // with the rest of the receipt, like the tax line; a surcharge on its own
+    // is what bringing the order cost. Only gas is left as fuel (never added:
+    // actualSide).
+    list.forEach(p => {
+      if (p.bucket !== 'fuel' || p.kind === 'fuel') return;
+      const t = bySplit[p.m.splitId || p.m.receiptId] || {};
+      const rest = Object.keys(t).filter(b => b !== 'fuel').sort((a, b) => t[b] - t[a])[0];
+      if (rest) p.bucket = rest;
+      else if (SURCHARGE.test(String(p.m.item || ''))) p.bucket = 'delivery';
+    });
     return list;
   }
+  const SURCHARGE = /\bsur-?charges?\b/i;
 
   // -------------------------------------------------------- by hand
 
@@ -238,6 +253,10 @@
         if (l.category === 'dumpster' || l.category === 'rental') dumps += c; else mats += c;
       });
       out.costs = { materials: mats, dumpsters: dumps, delivery: r.profit.deliveryCostCents || 0, fuel: r.profit.fuelCostCents || 0 };
+      // Made in QuickBooks, it priced no fuel of its own: its fuel is the
+      // job's own trips (pricing.js price, ctx.jobDays) -- no bid to compare
+      // the trips with.
+      out.fuelFromTrips = !!r.asAccepted;
       if (r.profit.subCostCents > 0) out.costs.subs = r.profit.subCostCents;
       out.complete = !!r.profit.complete;
       // Lines of a QuickBooks estimate with no known cost are noCost: the
@@ -292,6 +311,25 @@
     return count && Math.abs(h - paidHours) <= 0.05 + n * 0.01 ? count : null;
   }
 
+  // What the trips to the job have cost in gas so far: null when no trips
+  // are known; { cents, full, small, typedDays, miles, problems } -- cents null
+  // when what they cost can't be worked out (no miles, no gas price, fuel
+  // off on the estimate), and `why` says so.
+  function tripsFuel(job, id, typedHours, dayHours) {
+    if (!P() || !P().tripFuel || !window.YDEstimate || !YDEstimate.tripsOf) return null;
+    const est = job.estimate && typeof job.estimate === 'object' ? job.estimate : {};
+    const t = (id && YDEstimate.tripsOf(id, est)) || { full: 0, small: 0 };
+    const typedDays = typedHours > 0 && dayHours > 0 ? Math.ceil(Math.round(typedHours / dayHours * 1e6) / 1e6) : 0;
+    const trips = { full: t.full + typedDays, small: t.small };
+    if (!(trips.full + trips.small)) return null;
+    const f = P().tripFuel(est, trips);
+    const out = { cents: null, full: trips.full, small: trips.small, typedDays: typedDays, miles: f.miles, problems: f.problems || [], why: '' };
+    if ((est.off || {}).fuel) out.why = 'fuel is off on its estimate';
+    else if (f.costCents == null) out.why = (f.problems || [])[0] || 'not worked out';
+    else out.cents = f.costCents;
+    return out;
+  }
+
   function actualSide(job, id, est, ctx) {
     const rules = P() ? P().rules() : {};
     const dayHours = P() ? P().crewHours(rules, P().crewSizeOn(job.estimate)) : null;
@@ -331,12 +369,26 @@
     });
     const sub = id && window.YDSubs && YDSubs.forJob ? YDSubs.forJob(id) : null;
     if (sub) found.subs = (found.subs || 0) + sub.cents;
+    // Fuel is never what was bought: gas goes in the trucks, not on a job, so
+    // a gas receipt filed here is not added (it is listed). It is the trips
+    // themselves, at the estimate's miles and gas prices -- each day someone
+    // went, a whole day (every truck and the loader) or a small trip (one
+    // truck) by the hours put in (pricing.js tripDays, tripFuel). Hours typed
+    // on Labor Hours carry no day: they count as whole days, a crew-day's
+    // hours to a day.
+    const gasCents = found.fuel != null ? found.fuel : null;
+    delete found.fuel;
+    const fuel = tripsFuel(job, id, typedHours, dayHours);
+    if (fuel && fuel.cents !== null) found.fuel = fuel.cents;
     const costs = {};
     COSTS.forEach(([k]) => {
       if (hand[k]) costs[k] = { source: 'hand', cents: hand[k].v, hand: hand[k], found: found[k] != null ? found[k] : null };
+      else if (k === 'fuel' && fuel && fuel.cents !== null) costs[k] = { source: 'trips', cents: fuel.cents };
       else if (found[k] != null) costs[k] = { source: 'app', cents: found[k] };
       else costs[k] = { source: 'none', cents: null };
     });
+    costs.fuel.trips = fuel;
+    costs.fuel.gasCents = gasCents;
 
     const price = toCents(parseMoney(job.jobPrice || ''));
     // Materials quoted and paid for but never bought (app.js orderNotBought):
@@ -456,12 +508,28 @@
         (e.crewDays === null && e.has ? note('no crew-days estimated — the profit leaves out labor') : '');
     }
     const v = e.costs[key];
-    return fig(m, 'est', key, v == null ? dash : money(v), h);
+    return fig(m, 'est', key, v == null ? dash : money(v), h) +
+      (key === 'fuel' && e.fuelFromTrips && !h ? note('from QuickBooks, so no fuel bid: the same trips, with the days still on the Job schedule') : '');
+  }
+
+  // The trips a job's fuel is counted over, in words.
+  function tripsNote(t) {
+    const words = window.YDEstimate && YDEstimate.tripsWords ? YDEstimate.tripsWords(t.full, t.small) : plural(t.full + t.small, 'trip', 'trips');
+    return 'gas for ' + plural(t.full + t.small, 'trip', 'trips') + (t.small ? ': ' + words : '') + ', not receipts' +
+      (t.problems && t.problems.length ? ' · ⚠ ' + t.problems.join(', ') : '');
   }
 
   function actCell(m, key) {
     const a = m.act.costs[key], ev = m.est.costs[key];
-    if (a.source === 'hand') return fig(m, 'act', key, money(a.cents), a.hand) + (a.found != null ? note('the app found ' + money(a.found)) : '');
+    if (key === 'fuel' && a.source === 'trips') return fig(m, 'act', key, money(a.cents)) + note(tripsNote(a.trips));
+    // Trips made, but their gas can't be worked out: say why.
+    if (key === 'fuel' && a.source === 'none' && a.trips && a.trips.why) {
+      return fig(m, 'act', key, '<span class="eva-none">not worked out</span>') +
+        note(plural(a.trips.full + a.trips.small, 'trip', 'trips') + ' — ' + a.trips.why + (ev > 0 && m.recorded ? ' · counted as estimated' : ''));
+    }
+    if (a.source === 'hand') return fig(m, 'act', key, money(a.cents), a.hand) +
+      (key === 'fuel' ? (a.trips && a.trips.cents !== null ? note('the trips come to ' + money(a.trips.cents)) : '')
+        : a.found != null ? note('the app found ' + money(a.found)) : '');
     if (a.source === 'app') {
       const n = (m.act.lines[key] || []).filter(p => !isTaxLine(p.m)).length;
       const from = key === 'subs' && m.act.sub
@@ -513,7 +581,10 @@
     COSTS.forEach(([k, name, sub]) => {
       const a = m.act.costs[k], ev = m.est.costs[k];
       if (ALWAYS_SHOWN.indexOf(k) === -1 && a.source === 'none' && !(ev > 0) && !m.est.hand[k]) return;
-      const d = a.source !== 'none' && ev != null ? a.cents - ev : null;
+      // An imported job's fuel on both sides is the same trips: no difference
+      // to show (only the days still ahead), so none is.
+      const same = k === 'fuel' && m.est.fuelFromTrips && !m.est.hand.fuel && a.source === 'trips';
+      const d = !same && a.source !== 'none' && ev != null ? a.cents - ev : null;
       h += row(name, sub, estCell(m, k), actCell(m, k), diffHtml(d, false, money));
     });
     // A total without labor against one with it is no difference; the lines
@@ -585,8 +656,10 @@
     const what = (isDays ? 'Crew-days' : COST_NAME[key]) + ' — ' + (side === 'est' ? 'estimated' : 'actual') + ', by hand';
     let app = '';
     if (side === 'act' && isDays && m.act.labour.hours > 0) app = 'The clock and Labor Hours have ' + fmtHrsMin(m.act.labour.hours) + '.';
+    else if (side === 'act' && !isDays && m.act.costs[key].source === 'trips') app = 'Replaces the ' + money(m.act.costs[key].cents) + ' worked out from the trips.';
     else if (side === 'act' && !isDays && m.act.costs[key].source === 'app') app = 'Replaces the ' + money(m.act.costs[key].cents) + ' the app found.';
-    else if (side === 'act' && !isDays && hand && m.act.costs[key].found != null) app = 'Replaces the ' + money(m.act.costs[key].found) + ' the app found.';
+    else if (side === 'act' && !isDays && hand && m.act.costs[key].found != null) app = 'Replaces the ' + money(m.act.costs[key].found) +
+      (key === 'fuel' ? ' worked out from the trips.' : ' the app found.');
     else if (side === 'est' && m.est.from !== 'none') app = 'Replaces the estimate’s figure.';
     const val = hand ? (isDays ? String(hand.v) : (hand.v / 100).toFixed(2)) : '';
     return '<div class="eva-edit"><div class="eva-edit-h">' + esc(what) + '</div>' +
@@ -614,8 +687,17 @@
       if (!list.length) return;
       const shown = list.slice(0, 25).map(p => esc(String(p.m.item || 'Item')) + (p.m.location ? ' <span class="muted">(' + esc(p.m.location) + ')</span>' : '') +
         ' ' + esc(money(p.cents))).join(' · ');
-      parts.push('<li><b>' + esc(name) + ':</b> ' + shown + (list.length > 25 ? ' · and ' + (list.length - 25) + ' more' : '') + '</li>');
+      parts.push('<li><b>' + esc(k === 'fuel' ? 'Gas bought for this job (not added — fuel is figured from the trips)' : name) + ':</b> ' + shown +
+        (list.length > 25 ? ' · and ' + (list.length - 25) + ' more' : '') + '</li>');
     });
+    const t = a.costs.fuel.trips;
+    if (t) parts.push('<li><b>Fuel:</b> ' + (t.cents !== null ? esc(money(t.cents)) + ' — the' : 'not worked out (' + esc(t.why) + ') — the') +
+      ' drive there and back' + (t.miles != null ? ' (' + esc(String(t.miles)) + ' miles each way)' : '') +
+      ' for ' + esc(plural(t.full + t.small, 'trip', 'trips')) + ': ' + esc(YDEstimate.tripsWords(t.full, t.small)) +
+      (t.typedDays ? ' (' + esc(plural(t.typedDays, 'whole day', 'whole days')) + ' from hours typed in on Labor Hours)' : '') + '. ' +
+      (l.dayHours > 0 ? 'A day with at least half a crew-day’s hours there (' + esc(fmtHrsMin(l.dayHours / 2)) + ') counts every truck and the loader; a shorter visit, one truck.'
+        : 'A day with two people or more there counts every truck and the loader; one person, one truck.') +
+      ' At the estimate’s gas prices.</li>');
     if (a.notBought.count) parts.push('<li><b>Not bought</b> (quoted and paid for): ' + plural(a.notBought.count, 'line', 'lines') +
       (a.notBought.cents ? ', about ' + esc(money(a.notBought.cents)) + ' at Supplies prices' : '') +
       ' — never counted as spent, so it stays as profit</li>');
@@ -647,8 +729,8 @@
       '<summary>What the actual figures are made of</summary>' + (older || '') +
       '<ul>' + parts.join('') + hands.join('') + '</ul>' +
       '<p class="hint">Purchases come from Materials & Purchases above (receipts put on this job, and lines typed in). ' +
-      'Each is sorted by what the receipt was and its words — delivery charges, dumpsters and rentals, fuel. ' +
-      'Fuel goes on the trucks, not the job, so it is rarely recorded: set it with ✎ when you know it.</p></details>';
+      'Each is sorted by what the receipt was and its words — delivery charges, dumpsters and rentals. ' +
+      'Fuel is never matched to receipts: it is the gas for each trip someone made to the job, from the clock. Set it with ✎ if you want another figure.</p></details>';
   }
 
   function badgeOf(m) {

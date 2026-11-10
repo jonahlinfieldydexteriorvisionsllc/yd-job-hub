@@ -145,20 +145,43 @@
     const c = catalog();
     return { rules: P().rules(), items: c.items, prices: c.prices, vendors: c.vendors || {}, fuel: P().fuelPrices(), book: book,
              city: city != null ? String(city).trim() : (el('city') && el('city').value || '').trim(),
-             jobDays: e && jobId && P().asAccepted(e) ? jobDaysOf(jobId) : null, quotes: quotes || {}, inQb: !!(q && q.id) };
+             jobDays: e && jobId && P().asAccepted(e) ? tripsOf(jobId, e, true) : null, quotes: quotes || {}, inQb: !!(q && q.id) };
   }
   // The open job's (app.js boardFields) -- never used for a job not open.
   const openQuotes = () => (typeof window.ydOpenDeliveryQuotes === 'function' && window.ydOpenDeliveryQuotes()) || {};
-  // A job's days: each day someone was clocked in on it, and each day still
-  // ahead on the Job schedule -- a drive from the shop and back for each
-  // (Jonah, 21 Oct 2026). null when there are none yet.
-  function jobDaysOf(jobId) {
-    const days = new Set();
+  // A job's trips: each day someone was clocked in on it -- a drive from the
+  // shop and back for each (Jonah, 21 Oct 2026) -- told apart into whole days
+  // and small trips by the hours put in that day (pricing.js tripDays), and,
+  // with `ahead`, each day still ahead on the Job schedule, a whole day by
+  // plan. A shift still waiting for his OK was a trip all the same.
+  // { full, small, days } -- days: how many in all. null when there are none.
+  function tripsOf(jobId, e, ahead) {
+    const byDay = {};
+    const today = typeof localYMD === 'function' ? localYMD(new Date()) : new Date().toISOString().slice(0, 10);
     try {
-      if (window.YDClock && YDClock.jobShifts) YDClock.jobShifts(jobId).forEach(s => { if (s.day) days.add(s.day); });
-      if (window.YDCalendar && YDCalendar.forJob) (YDCalendar.forJob(jobId, 180) || []).forEach(o => { if (o.jobDay && o.day) days.add(o.day); });
+      if (window.YDClock && YDClock.jobShifts) YDClock.jobShifts(jobId).forEach(s => {
+        if (!s.day) return;
+        const d = byDay[s.day] = byDay[s.day] || { day: s.day, hours: 0, who: {}, people: 0 };
+        d.hours += Number(s.paid) || 0;
+        if (!d.who[s.who || s.uid]) { d.who[s.who || s.uid] = true; d.people++; }
+      });
+      // A day on the schedule someone has already clocked in on goes by its
+      // hours, as the trips made do (jobcosts.js).
+      if (ahead && window.YDCalendar && YDCalendar.forJob) (YDCalendar.forJob(jobId, 180) || []).forEach(o => {
+        if (!o.jobDay || !o.day || o.day < today || byDay[o.day]) return;
+        byDay[o.day] = { day: o.day, hours: 0, who: {}, people: 0, planned: true };
+      });
     } catch (err) { /* the clock or the calendar not started yet: counted on the next pricing */ }
-    return days.size || null;
+    const days = Object.values(byDay);
+    if (!days.length) return null;
+    const t = P().tripDays(days, P().crewHours(P().rules(), P().crewSizeOn(e)));
+    return { full: t.full, small: t.small, days: days.length };
+  }
+  // "1 whole day, 9 small trips (one truck)".
+  function tripsWords(full, small) {
+    const n = (k, one, many) => k + ' ' + (k === 1 ? one : many);
+    return [full ? n(full, 'whole day', 'whole days') : '', small ? n(small, 'small trip', 'small trips') + ' (one truck, no loader)' : '']
+      .filter(Boolean).join(', ');
   }
   let last = null;            // the last worked-out price, for the totals and QuickBooks
   let priceRuns = 0;          // how many times it has been worked out (changed() compares)
@@ -200,6 +223,10 @@
   window.YDEstimate = {
     // A job's miles looked up again once its map pin is placed by hand.
     retrip: id => retrip(id),
+    // The trips made to a job, whole days and small ones (jobcosts.js: what
+    // its gas cost), and the same in words.
+    tripsOf: (jobId, saved) => tripsOf(jobId, saved || {}, false),
+    tripsWords: tripsWords,
     get() {
       const o = clone(est);
       o.chat = o.chat.slice(-CHAT_KEEP);
@@ -2428,6 +2455,7 @@
         '<label>Gas $/gal <input inputmode="decimal" placeholder="' + esc(num(fp.gasCents) !== null ? (fp.gasCents / 100).toFixed(2) : '') + '" value="' + esc(fu.gasCents == null ? '' : (fu.gasCents / 100).toFixed(2)) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'gasCents\', this.value)"></label>' +
         '<label>Diesel <input inputmode="decimal" placeholder="' + esc(num(fp.dieselCents) !== null ? (fp.dieselCents / 100).toFixed(2) : '') + '" value="' + esc(fu.dieselCents == null ? '' : (fu.dieselCents / 100).toFixed(2)) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'dieselCents\', this.value)"></label>' +
         (fp.asOf ? '<small class="muted">prices week of ' + esc(fp.asOf) + '</small>' : '') +
+        (r.asAccepted && f.smallDays > 0 ? '<small class="muted">' + esc(tripsWords(f.fullDays, f.smallDays)) + '</small>' : '') +
         (r.asAccepted && f.problems.length ? ' <span class="bad">⚠ ' + esc(f.problems.join(' · ')) + '</span>' : '')) +
       '</span><b>' + fuelAmt + '</b></div>');
     // Dumpsters, planting package, markers: lines the rules added (none on
