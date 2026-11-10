@@ -393,6 +393,8 @@
       // for Nextdoor: the Media tab at its card.
       else if (want === 'posts' && window.openPosts) window.openPosts();
       else if (want === 'nextdoor' && window.openNextdoor) window.openNextdoor();
+      // The Monday website report (sitereport.js): Media, at Website.
+      else if (want === 'website' && window.openSiteReport) window.openSiteReport();
       else if (want === 'paysheet' && window.openPaySheet) window.openPaySheet();
       else if (want === 'invoices' && window.openInvoices) window.openInvoices();
       else if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {

@@ -1135,7 +1135,8 @@ function switchTab(name) {
 // one ready for Nextdoor opens it at that post's card (Jonah, 9 Nov 2026:
 // on the Media tab, "not smack dab on my home page").
 const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports',
-  deadlines: 'openDeadlines', posts: 'openPosts', nextdoor: 'openNextdoor', changeorders: 'openChangeOrders', paysheet: 'openPaySheet', invoices: 'openInvoices', pins: 'openPins' };
+  deadlines: 'openDeadlines', posts: 'openPosts', nextdoor: 'openNextdoor', changeorders: 'openChangeOrders', paysheet: 'openPaySheet', invoices: 'openInvoices', pins: 'openPins',
+  website: 'openSiteReport' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }

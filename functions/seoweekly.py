@@ -231,7 +231,7 @@ def _idea_id(kind, *parts):
     return kind[:2] + hashlib.sha1("|".join([kind] + [str(p) for p in parts]).encode()).hexdigest()[:12]
 
 
-def ideas(month_rows, this, last, sent, today):
+def ideas(month_rows, this, last, sent, today, most=IDEAS_MAX):
     """What to change, best first: [{id, kind, title, why, page, queries, ...}].
     Plain rules on the numbers. A search for the business itself is never one.
     An idea sent to Claude in the last SENT_DAYS is left out."""
@@ -305,8 +305,43 @@ def ideas(month_rows, this, last, sent, today):
             continue
         i.pop("score", None)
         keep.append(i)
-        if len(keep) >= IDEAS_MAX:
+        if len(keep) >= most:
             break
+    return keep
+
+
+def live_page(path):
+    """The page an address lands on today. Google's four weeks still hold the
+    Squarespace addresses (an old Yard Talk post's /yard-talk/xk406...), which
+    redirect to their new pages: an idea must name the page to change. None
+    when the address no longer leads to a page."""
+    try:
+        r = requests.head(SITE + path, allow_redirects=True, timeout=15,
+                          headers={"User-Agent": "Mozilla/5.0 (compatible; YD-Job-Hub-site-check)"})
+    except requests.RequestException as e:
+        print("seoweekly: page not checked:", path, e)
+        return path
+    if r.status_code >= 400:
+        return None
+    return _path(r.url) if str(r.url).startswith(SITE) else path
+
+
+def pages_today(found):
+    """Each idea's page as it is today; an idea whose page is gone is dropped,
+    and two that now land on one page keep the first (one idea a page)."""
+    keep = []
+    for i in found:
+        if not i.get("page"):
+            keep.append(i)
+            continue
+        now = live_page(i["page"])
+        if now is None or any(k.get("page") == now for k in keep):
+            continue
+        if now != i["page"]:
+            i["why"] = i["why"].replace(i["page"], now)
+            i["title"] = i["title"].replace(i["page"], now)
+            i["page"] = now
+        keep.append(i)
     return keep
 
 
@@ -338,7 +373,8 @@ def search_part(raw, today, sent):
         "pages": pages[:PAGES_SHOWN],
         "services": groups(this, last, SERVICES),
         "towns": groups(this, last, TOWNS),
-        "ideas": ideas(raw["month"], this, last, sent, today),
+        # Twice as many looked at: an idea whose page is gone drops out.
+        "ideas": pages_today(ideas(raw["month"], this, last, sent, today, IDEAS_MAX * 2))[:IDEAS_MAX],
     }
 
 

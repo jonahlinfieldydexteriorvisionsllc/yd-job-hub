@@ -237,8 +237,10 @@
       ['coming', '🗓️ Coming up', comingWords()],
       ['schedule', '⏰ The schedule', scheduleWords()],
       ['hookup', '🔌 Hook up', hookupWords()],
+      // The website's weekly report (sitereport.js): searches, place on Google, what to change.
+      ['site', '🔎 Website', window.YDSiteReport ? window.YDSiteReport.words() : ''],
     ];
-    const titles = { up: '📜 Posts that went up', coming: '🗓️ Coming up', schedule: '⏰ The schedule', hookup: '🔌 Hook up' };
+    const titles = { up: '📜 Posts that went up', coming: '🗓️ Coming up', schedule: '⏰ The schedule', hookup: '🔌 Hook up', site: '🔎 The website on Google' };
     body.innerHTML =
       (busy ? '<div class="sp-busy">⏳ ' + esc(busy) + '</div>' : '') +
       readyHtml() + needsHtml() +
@@ -246,7 +248,8 @@
         '<button type="button" class="mn-view-btn' + (view === k ? ' on' : '') + '" aria-pressed="' + (view === k) +
           '" onclick="spView(\'' + k + '\')"><b>' + name + '</b><small>' + esc(small) + '</small></button>').join('') + '</div>' +
       section(titles[view] || '', view === 'up' ? upBadge() : '',
-        view === 'schedule' ? autoHtml() + scheduleHtml() : view === 'hookup' ? hookupHtml() : view === 'coming' ? comingHtml() : upHtml());
+        view === 'schedule' ? autoHtml() + scheduleHtml() : view === 'hookup' ? hookupHtml() : view === 'coming' ? comingHtml() :
+          view === 'site' ? (window.YDSiteReport ? window.YDSiteReport.html() : '') : upHtml());
     // A Nextdoor push tapped: the ready card, once it has drawn.
     if (readyUntil && el('spReadyBox')) {
       const on = Date.now() < readyUntil;
@@ -760,6 +763,9 @@
   // sends a Nextdoor push here.
   window.homeNextdoor = window.openNextdoor;
   window.spView = k => { view = k; open = null; draw(); if (k === 'up') readOld(); };
+  // The website report read or changed: drawn when it's the part showing, and
+  // its button's words either way.
+  document.addEventListener('yd-site-report', () => draw());
   window.spUpPlace = k => { upPlace = PLACES.indexOf(k) !== -1 ? k : ''; open = null; draw(); };
   window.spReadOld = () => readOld(true);
   window.spDown = (id, on) => {
