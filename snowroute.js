@@ -162,6 +162,7 @@
       return '<div class="rt-leg">' + (leg ? miles(leg.m) + ' mi <br>' + mins(leg.s) : onMap(s.a) ? (s.straight != null ? '≈ ' + s.straight + ' mi' : '') : 'not on <br>the map') + '</div>' +
         '<div class="rt-stop' + (onMap(s.a) ? '' : ' lost') + (far ? ' far' : '') + '"><span class="rt-n">' + (n + 1) + '</span>' +
           '<b>' + esc(a.name || s.id) + '</b><small>' + esc(a.address || '') + '</small>' +
+          (window.YDSnow && YDSnow.saltTag ? YDSnow.saltTag(a, false) : '') +
           (far ? '<small class="rt-warn">⚠ far from the last stop — check this address</small>' : '') +
           (edits() ? '<span class="rt-move">' +
             (n > 0 ? '<button onclick="routeMove(\'' + safe(s.id) + '\', -1)" title="Earlier" aria-label="Earlier">' + up + '</button>' : '') +

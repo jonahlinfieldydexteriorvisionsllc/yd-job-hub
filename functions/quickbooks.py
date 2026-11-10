@@ -2880,6 +2880,7 @@ def _snow_place(db, accounts, e, cust, lines, parts, name, site, ref, crew_notes
         db.collection("snowAccounts").document(have).collection("private").document("rates").set({"fromQb": ref}, merge=True)
         return have, False
     pricing, labor, extras, notes, salt = _snow_terms(lines)
+    paw = any(re.search(r"paw", str(x.get("name") or ""), re.I) for x in extras if x.get("per") == "application")
     crew = " ".join(str(crew_notes or "").split())
     if crew:
         notes = ((notes + " · ") if notes else "") + "For the crew: " + crew
@@ -2907,6 +2908,10 @@ def _snow_place(db, accounts, e, cust, lines, parts, name, site, ref, crew_notes
         "type": "commercial" if re.search(r"commercial", item_names, re.I) or (site and business) else "residential",
         "active": True, "season": _snow_season(_now()), "minTriggerInches": 1, "serviceWindow": "standard",
         "areaNotes": notes, "vacationHolds": [], "driveSqFt": None, "walkSqFt": None, "saltApplies": salt,
+        # What the crew are told on the route (snow.js saltTag): the estimate
+        # priced salt, paw-friendly or not -- or priced none, so none goes
+        # down there (Jonah, 10 Nov 2026).
+        "saltKind": ("paw" if paw else "regular") if salt else "none", "pawSalt": bool(salt and paw),
         "fromQuickBooks": {"estimateId": str(e.get("Id")), "docNumber": str(e.get("DocNumber") or "")},
         "customerId": cust_id,
     }

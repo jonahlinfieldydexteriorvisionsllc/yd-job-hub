@@ -56,9 +56,49 @@
     return node && node.mode !== 'inherit' && node.cents != null ? node.cents : null;
   }
 
+  // An extra on the account's prices that is salt charged each time it goes
+  // down, and the first of them.
+  const isSaltApp = x => !!x && x.per === 'application' && /salt/i.test(String(x.name || ''));
+  const saltAppExtra = p => (((p && p.extras) || []).find(isSaltApp)) || null;
+  // Whether the crew salt here: 'none', 'regular', 'paw', or '' when nobody
+  // has said (an account from before this was asked).
+  const saltKindOf = a => (a && ['none', 'regular', 'paw'].indexOf(a.saltKind) !== -1 ? a.saltKind : '');
+  // The salt badge every screen shows for an account (the Snow tab, the
+  // route, a storm's stops), so the crew never salt where it isn't wanted
+  // or put rock salt where only paw salt may go (Jonah, 10 Nov 2026).
+  // unset: what an account nobody has said for shows -- the old small
+  // "salt" when salt is on its price, and "Salt not set" for whoever can
+  // change it, so it gets said.
+  function saltTag(a, unset) {
+    const k = saltKindOf(a);
+    if (k === 'none') return '<span class="snow-tag nosalt">🚫 No salt</span>';
+    if (k === 'paw') return '<span class="snow-tag paw">🐾 Paw salt only</span>';
+    if (k === 'regular') return '<span class="snow-tag salt">🧂 Salt</span>';
+    if (a && a.saltApplies) return '<span class="snow-tag salt">salt</span>';
+    return unset ? '<span class="snow-tag saltq" title="Edit the account and say whether it gets salt">Salt not set</span>' : '';
+  }
+
+  // Salt charged each time it goes down (an extra "per application" on the
+  // account's prices: $35 a time on one driveway, $81 on a lot), in cents, or null. Paw-
+  // friendly salt's price for an account that gets paw salt, when both are
+  // priced.
+  function saltPerApplication(id) {
+    const p = pricing[id], a = accounts[id] || {};
+    const list = ((p && p.extras) || []).filter(x => x && x.per === 'application' && /salt/i.test(String(x.name || '')) &&
+      typeof x.cents === 'number' && x.cents > 0);
+    if (!list.length) return null;
+    const paw = x => /paw/i.test(String(x.name || ''));
+    const hit = list.find(x => paw(x) === !!a.pawSalt) || list[0];
+    return hit.cents;
+  }
+
   // What one visit bills. The single place this is worked out -- storm billing,
   // the route screen and the reports all call this, so they cannot disagree.
-  function priceVisit(id, inches, minutesOnSite, crewSize) {
+  // salted: salt went down on this visit (its pounds above 0). An account
+  // charged so much each time it is salted is charged then, and only then
+  // (Jonah, 10 Nov 2026: "we need that on there" -- it was recorded on the
+  // account since 15 Oct and never billed).
+  function priceVisit(id, inches, minutesOnSite, crewSize, salted) {
     const p = pricing[id];
     if (!p || !p.pricing) return null;
     const pr = p.pricing;
@@ -106,8 +146,12 @@
     const manHours = hundredths / 100;
     const labor = p.laborRateCents ? Math.round(hundredths * p.laborRateCents / 100) : 0;
 
-    return { plowCents: base - salt, saltCents: salt, laborCents: labor,
-             manHours: manHours, totalCents: base + labor };
+    // On top of the visit's price, never carved out of it: it is charged
+    // only on visits that were salted.
+    const perApp = salted ? (saltPerApplication(id) || 0) : 0;
+
+    return { plowCents: base - salt, saltCents: salt + perApp, saltAppCents: perApp, laborCents: labor,
+             manHours: manHours, totalCents: base + labor + perApp };
   }
 
   // ---------------------------------------------------------------- render
@@ -239,7 +283,7 @@
           (place[id] ? '<span class="snow-route-n" title="Stop ' + place[id] + ' on the route">' + place[id] + '</span>' : '') +
           '<span class="snow-name">' + esc(a.name) + '</span>' +
           (a.type === 'commercial' ? '<span class="snow-tag commercial">commercial</span>' : '') +
-          (a.saltApplies ? '<span class="snow-tag salt">salt</span>' : '') +
+          saltTag(a, edits) +
           (a.minTriggerInches > 1 ? '<span class="snow-tag trigger">' + a.minTriggerInches + '"+ only</span>' : '') +
           (a.lat == null ? '<span class="snow-tag nolocation" title="Not found on the map yet, so it goes at the end of the route">no location</span>' : '') +
           (held ? '<span class="snow-tag hold">on hold</span>' : '') +
@@ -339,6 +383,9 @@
     pricing: () => pricing,
     refreshPricing,
     priceVisit,
+    saltPerApplication,
+    saltKindOf,
+    saltTag,
     resolveTier,
     render,
     addressShown,
@@ -762,6 +809,11 @@
     tick('sfNoLabor', !!(p && p.laborRateCents === null));
     tick('sfSaltOn', !!(pr && pr.salt && pr.salt.included));
     set('sfSaltAmt', pr && pr.salt && dollars(pr.salt.portionCents));
+    // Salt: none, ordinary or paw-friendly, as the crew are told on the
+    // route -- left unset ('') on an account nobody has said for yet.
+    set('sfSaltKind', saltKindOf(a));
+    const app = saltAppExtra(p);
+    set('sfSaltApp', app && dollars(app.cents));
 
     snowFormToggle();
     document.getElementById('snowFormModal').classList.add('active');
@@ -791,9 +843,28 @@
     editingId = null;
   };
 
+  window.sfSaltKind = function (kind) {
+    const box = document.getElementById('sfSaltKind');
+    if (box) box.value = kind;
+    snowFormToggle();
+  };
+
   window.snowFormToggle = function () {
     document.getElementById('sfPerInchRow').hidden = !checked('sfPerInchOn');
     document.getElementById('sfSaltRow').hidden = !checked('sfSaltOn');
+    const kind = val('sfSaltKind');
+    document.querySelectorAll('.sf-salt-kind').forEach(b => {
+      const on = b.getAttribute('data-kind') === kind;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', String(on));
+    });
+    const charge = document.getElementById('sfSaltCharge');
+    if (charge) charge.hidden = !(kind === 'regular' || kind === 'paw');
+    const hint = document.getElementById('sfSaltHint');
+    if (hint) hint.textContent = kind === 'none' ? 'The crew see “🚫 No salt” on this stop and aren’t asked for salt.'
+      : kind === 'paw' ? 'The crew see “🐾 Paw salt only” on this stop.'
+      : kind === 'regular' ? 'The crew see “🧂 Salt” on this stop.'
+      : 'Not set yet: pick one, so the crew know whether to salt here.';
     const noLabor = checked('sfNoLabor');
     document.getElementById('sfLabor').disabled = noLabor;
     document.getElementById('sfNoLaborHint').hidden = !noLabor;
@@ -826,6 +897,7 @@
       labor: checked('sfNoLabor') ? null : money('sfLabor'), perInchOn: checked('sfPerInchOn'),
       t13: money('sfT13'), t46: money('sfT46'), t6: money('sfT6'), t9: money('sfT9'),
       perInchAmt: money('sfPerInchAmt'), perInchAbove: parseInt(val('sfPerInchAbove'), 10) || 3, saltAmt: money('sfSaltAmt'),
+      saltKind: val('sfSaltKind'), saltApp: money('sfSaltApp'),
     };
     const mySeq = formSeq;
 
@@ -905,8 +977,14 @@
       vacationHolds: (existing && existing.vacationHolds) || [],
       driveSqFt: form.drive,
       walkSqFt: form.walk,
-      saltApplies: form.saltOn,
+      // Whether the crew salt here, and with what (storm.js shows it on the
+      // stop). Not said yet: as before, salt on the price means salt.
+      saltApplies: form.saltKind ? form.saltKind !== 'none' : !!(form.saltOn || form.saltApp),
+      saltKind: form.saltKind || null,
+      pawSalt: form.saltKind === 'paw',
     };
+    // No salt means nothing charged for it.
+    const salts = form.saltKind !== 'none';
 
     // cents is written as null on an inheriting tier, not left out: the save
     // is merged into the stored record, so leaving it out kept the old price.
@@ -926,12 +1004,21 @@
         },
         perInch: form.perInchOn ? { cents: form.perInchAmt || 0, aboveInches: form.perInchAbove } : null,
         salt: {
-          included: form.saltOn,
-          portionCents: form.saltOn ? (form.saltAmt || 0) : 0,
+          included: salts && form.saltOn,
+          portionCents: salts && form.saltOn ? (form.saltAmt || 0) : 0,
           perBagCents: null,
         },
       },
     };
+    // Salt charged each time it goes down: the form's one, in place of any
+    // before it; every other extra on the account kept as it was. Written
+    // only when the account's prices are here to keep them from: an array is
+    // stored whole, so writing it from nothing would wipe the rest.
+    if (!existing || pricing[id]) {
+      priv.extras = ((existing && pricing[id] && pricing[id].extras) || []).filter(x => !isSaltApp(x))
+        .concat(salts && form.saltApp ? [{ name: form.saltKind === 'paw' ? 'Salt — paw-friendly' : 'Salt',
+                                          cents: form.saltApp, per: 'application' }] : []);
+    }
 
     // Both halves together: an account with an address but no pricing would
     // quietly bill nothing. Not awaited -- the write lands locally at once and
@@ -967,6 +1054,8 @@
     out['Each inch above'] = pr.perInch && typeof pr.perInch.cents === 'number'
       ? C.money(pr.perInch.cents) + ' over ' + (pr.perInch.aboveInches || 0) + '"' : 'off';
     out['Salt'] = pr.salt && pr.salt.included ? C.money(pr.salt.portionCents || 0) : 'off';
+    const app = saltAppExtra(p);
+    out['Salt each time'] = app ? C.money(app.cents) : 'off';
     out['Labor rate per hour'] = typeof (p && p.laborRateCents) === 'number' ? C.money(p.laborRateCents) : 'not set';
     return out;
   }

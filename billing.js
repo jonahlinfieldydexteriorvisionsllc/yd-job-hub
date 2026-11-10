@@ -495,12 +495,22 @@
         const was = old ? { inches: old.inches, saltBags: old.saltBags == null ? null : old.saltBags,
                             saltLbs: old.saltLbs == null ? null : old.saltLbs, totalCents: count(old.totalCents) } : null;
         const salt = keepSalt ? (stop.saltLbs == null ? null : stop.saltLbs) : saltLbs;
+        // Salt went down on this visit (pounds, or bags on an older storm).
+        const salted = salt != null ? count(salt) > 0 : count(stop.saltBags) > 0;
         let line;
         if (old && count(old.inches) === inches) {
-          // Only the salt changed. A visit is not charged by it, so the
-          // money stays as it was billed -- re-pricing would also move the
-          // plowing to whatever the customer's price is today.
-          line = Object.assign({}, old, { saltLbs: salt, fixedAt: at, fixedBy: by || '', was: was });
+          // Only the salt changed. The plowing stays as it was billed --
+          // re-pricing would move it to whatever the customer's price is
+          // today. Salt charged each time it goes down comes off when the
+          // visit turns out unsalted, and goes on (at today's price) when it
+          // turns out salted; one already charged keeps its price.
+          // A visit already salted keeps whatever it was charged for that
+          // (nothing, on a bill closed before salt was charged this way).
+          const hadApp = count(old.saltAppCents);
+          const wasSalted = old.saltLbs != null ? count(old.saltLbs) > 0 : count(old.saltBags) > 0;
+          const app = !salted ? 0 : wasSalted ? hadApp : (YDSnow.saltPerApplication(accountId) || 0);
+          line = Object.assign({}, old, { saltLbs: salt, fixedAt: at, fixedBy: by || '', was: was,
+            saltAppCents: app, saltCents: count(old.saltCents) - hadApp + app, totalCents: count(old.totalCents) - hadApp + app });
         } else {
           // The time on site is the bill's own (pauses already taken off). A
           // visit that was left off the bill gets it worked out the way
@@ -513,14 +523,15 @@
             mins = Math.max(0, onSite - paused);
             Object.assign(extra, { accountId: accountId, pass: pass, minutes: mins, onSiteMinutes: onSite, pausedMinutes: paused });
           }
-          const p = YDSnow.priceVisit(accountId, inches, mins, s.crewSize);
+          const p = YDSnow.priceVisit(accountId, inches, mins, s.crewSize, salted);
           if (!p) throw new Error('No price for ' + accountName(accountId) + ' — check their pricing on the Snow tab');
           // Worked out at the customer's price today, so the rate printed
           // beside the labour line is today's too.
           const rate = (YDSnow.pricing()[accountId] || {}).laborRateCents;
           line = Object.assign({}, old || extra, {
             inches: inches, saltLbs: salt, laborRateCents: rate != null ? rate : null,
-            manHours: p.manHours, plowCents: p.plowCents, saltCents: p.saltCents, laborCents: p.laborCents, totalCents: p.totalCents,
+            manHours: p.manHours, plowCents: p.plowCents, saltCents: p.saltCents, saltAppCents: p.saltAppCents || 0,
+            laborCents: p.laborCents, totalCents: p.totalCents,
             fixedAt: at, fixedBy: by || '', was: was,
           });
         }

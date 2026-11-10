@@ -924,6 +924,23 @@
   .snow-tag.salt       { background:var(--surface-2); color:var(--brand-ink); border:1px solid var(--border-strong); }
   .snow-tag.trigger    { background:#fbeaca; color:#9a6a12; }
   .snow-tag.hold       { background:var(--neg-soft); color:var(--neg); }
+  /* Salt (Jonah, 10 Nov 2026): no-salt and paw-salt properties stand out on
+     every screen the crew use, so nobody salts one out of habit. */
+  .snow-tag.nosalt     { background:var(--neg); color:#fff; font-size:11px; }
+  .snow-tag.paw        { background:#6b3fa0; color:#fff; font-size:11px; }
+  .snow-tag.saltq      { background:transparent; color:var(--muted); border:1px dashed var(--border-strong); }
+  .salt-warn { margin:8px 0 6px; padding:10px 12px; border-radius:10px; font-size:14px; line-height:1.35; }
+  .salt-warn.none { background:var(--neg-soft); color:var(--neg); border:2px solid var(--neg); }
+  .salt-warn.paw  { background:#efe6fa; color:#4b2a78; border:2px solid #6b3fa0; }
+  html[data-night] .salt-warn.paw { background:#2c2140; color:#e3d4fb; }
+  .salt-anyway { min-height:44px; margin-bottom:6px; }
+  .rt-stop .snow-tag { align-self:flex-start; margin-top:3px; }
+  .sf-salt-kinds { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; margin:4px 0 2px; }
+  .sf-salt-kind { min-height:44px; border-radius:10px; border:1.5px solid var(--border-strong); background:var(--surface);
+                  color:var(--text); font:inherit; font-size:13px; font-weight:600; cursor:pointer; padding:6px 4px; }
+  .sf-salt-kind.on[data-kind="none"]    { background:var(--neg); border-color:var(--neg); color:#fff; }
+  .sf-salt-kind.on[data-kind="regular"] { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .sf-salt-kind.on[data-kind="paw"]     { background:#6b3fa0; border-color:#6b3fa0; color:#fff; }
   /* The address opens the map: a whole 44px strip to hit with a glove,
      not one line of 13px text. */
   .snow-addr { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:2px; min-height:44px;

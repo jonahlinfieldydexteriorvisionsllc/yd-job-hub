@@ -484,6 +484,14 @@
     touched(el);
   };
 
+  // Salt went down on this visit: pounds above 0, or bags on a storm from
+  // before salt was weighed. An account charged per application is charged
+  // for it (snow.js priceVisit).
+  function salted(s) {
+    const lbs = num(s && s.saltLbs, null);
+    return lbs != null ? lbs > 0 : num(s && s.saltBags, 0) > 0;
+  }
+
   function readStepper(stopId, kind, fallback) {
     const el = document.getElementById('st-' + kind + '-' + stopId);
     if (!el) return fallback;
@@ -635,8 +643,7 @@
       actions =
         stepper(sid, 'inches', 'Inches cleared', num(s.inchesCleared, ''), 0.5) +
         inchChips(sid, s) +
-        stepper(sid, 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
-        saltChips(sid, s) +
+        saltPart(sid, s, a) +
         '<button class="btn-stop depart" onclick="departStop(\'' + sid + '\')">Depart</button>' +
         // Arrive tapped on the wrong card, or too soon: taken back, not
         // left to bill a visit that never happened.
@@ -647,8 +654,7 @@
       actions =
         stepper(sid, 'inches', 'Inches cleared', num(s.inchesCleared, ''), 0.5) +
         inchChips(sid, s) +
-        stepper(sid, 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
-        saltChips(sid, s) +
+        saltPart(sid, s, a) +
         '<button class="btn btn-filled btn-sm" onclick="saveFix(\'' + sid + '\')">Save</button>' +
         '<button class="btn btn-sm" onclick="cancelFix()">Cancel</button>';
     } else {
@@ -660,7 +666,7 @@
       '<span class="stop-name">' + esc(a.name || s.accountId) + '</span>' +
       (pass > 1 ? '<span class="snow-tag trigger">pass ' + pass + '</span>' : '') +
       (a.serviceWindow === 'morning' ? '<span class="snow-tag hold">by morning</span>' : '') +
-      (a.saltApplies ? '<span class="snow-tag salt">salt</span>' : '');
+      (window.YDSnow && YDSnow.saltTag ? YDSnow.saltTag(a, false) : (a.saltApplies ? '<span class="snow-tag salt">salt</span>' : ''));
     // A finished stop opened from its line folds back from its heading.
     const head = finished && fixing !== s.id
       ? '<button type="button" class="stop-head stop-head-btn" onclick="stopOpen(\'' + sid + '\')" aria-expanded="true">' +
@@ -804,9 +810,34 @@
     });
   };
 
+  // The salt part of a stop being worked. A property that gets no salt
+  // shows that in red instead of a salt box, so nobody salts it out of
+  // habit -- no salt is recorded for it -- with one deliberate way to say
+  // they did anyway (the customer asked on the spot). A paw-salt property
+  // says so over its box.
+  const saltAnyway = {};      // stop id -> the crew said they salted a no-salt property
+  function saltPart(sid, s, a) {
+    const kind = window.YDSnow && YDSnow.saltKindOf ? YDSnow.saltKindOf(a) : '';
+    if (kind === 'none' && !saltAnyway[s.id] && !(num(s.saltLbs, 0) > 0)) {
+      return '<div class="salt-warn none">🚫 <b>No salt here.</b> Don’t put any down at this property.</div>' +
+        '<button type="button" class="btn btn-sm salt-anyway" onclick="saltAnywayOn(\'' + sid + '\')">They asked for salt today</button>';
+    }
+    return (kind === 'paw' ? '<div class="salt-warn paw">🐾 <b>Paw-friendly salt only.</b> Never rock salt here.</div>'
+      : kind === 'none' ? '<div class="salt-warn none">🚫 This property doesn’t get salt — only if they asked for it today.</div>' : '') +
+      stepper(sid, 'lbs', kind === 'paw' ? 'Paw salt used (lbs)' : 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
+      saltChips(sid, s);
+  }
+  window.saltAnywayOn = function (id) {
+    if (!stops[id]) return;
+    saltAnyway[id] = true;
+    render();
+    const box = document.getElementById('st-lbs-' + id);
+    if (box) box.focus();
+  };
+
   // Both boxes must hold a number before a stop is saved: what is in them is
   // what the customer is billed. Says which one is missing and puts the
-  // cursor in it.
+  // cursor in it. A no-salt property has no salt box (saltPart): none went down.
   function boxesFilled(id) {
     const empty = el => !el || el.value.trim() === '' || isNaN(parseFloat(el.value));
     const inBox = document.getElementById('st-inches-' + id);
@@ -816,7 +847,7 @@
       return false;
     }
     const box = document.getElementById('st-lbs-' + id);
-    if (empty(box)) {
+    if (box && empty(box)) {
       showToast('Put in the salt used, in pounds — 0 if none');
       if (box) box.focus();
       return false;
@@ -1330,7 +1361,7 @@
     // A pricing record with every box blank counts as no price: it would
     // bill $0 -- unless the account is charged by the hour alone.
     const noPrice = s => {
-      const p = YDSnow.priceVisit(s.accountId, num(s.inchesCleared, storm.accumulationInches), 0, storm.crewSize);
+      const p = YDSnow.priceVisit(s.accountId, num(s.inchesCleared, storm.accumulationInches), 0, storm.crewSize, salted(s));
       const hourly = ((YDSnow.pricing()[s.accountId] || {}).laborRateCents || 0) > 0;
       return !p || (!(p.plowCents + p.saltCents > 0) && !hourly);
     };
@@ -1362,7 +1393,7 @@
       // Numbers only, as on the stop card: these are frozen into the bill, and
       // the billing screens print them.
       const inches = num(s.inchesCleared, storm.accumulationInches);
-      const p = YDSnow.priceVisit(s.accountId, inches, mins, storm.crewSize);
+      const p = YDSnow.priceVisit(s.accountId, inches, mins, storm.crewSize, salted(s));
       // Left off, as the question before closing said: no $0 lines on a bill.
       if (!p || !(p.totalCents > 0)) return;
       minutes += mins;
@@ -1378,6 +1409,9 @@
         laborRateCents: ((YDSnow.pricing()[s.accountId] || {}).laborRateCents) != null
           ? YDSnow.pricing()[s.accountId].laborRateCents : null,
         saltBags: num(s.saltBags, null), saltLbs: num(s.saltLbs, null), plowCents: p.plowCents, saltCents: p.saltCents,
+        // The salt charged because salt went down (priceVisit), kept apart so
+        // a fixed salt figure can take it off or put it on exactly.
+        saltAppCents: p.saltAppCents || 0,
         laborCents: p.laborCents, totalCents: p.totalCents,
       });
     });

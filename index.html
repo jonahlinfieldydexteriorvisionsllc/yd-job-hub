@@ -1410,10 +1410,24 @@
       </div>
       <div class="hint" id="sfNoLaborHint" hidden>This account pays the flat rate however long the night takes.</div>
 
-      <label class="chk mt"><input type="checkbox" id="sfSaltOn" onchange="snowFormToggle()"> Part of the rate is salt</label>
-      <div class="field" id="sfSaltRow" hidden><span class="label">How much of it is salt</span>
-        <input id="sfSaltAmt" inputmode="decimal" placeholder="$100">
-        <div class="hint">Shown as its own line on every visit, so salt revenue is visible.</div>
+      <div class="form-section-label">Salt</div>
+      <input type="hidden" id="sfSaltKind">
+      <div class="sf-salt-kinds" role="group" aria-label="Salt">
+        <button type="button" class="sf-salt-kind" data-kind="none" onclick="sfSaltKind('none')">🚫 No salt</button>
+        <button type="button" class="sf-salt-kind" data-kind="regular" onclick="sfSaltKind('regular')">🧂 Salt</button>
+        <button type="button" class="sf-salt-kind" data-kind="paw" onclick="sfSaltKind('paw')">🐾 Paw-friendly salt</button>
+      </div>
+      <div class="hint" id="sfSaltHint"></div>
+      <div id="sfSaltCharge" hidden>
+        <div class="field"><span class="label">Charged each time it's salted</span>
+          <input id="sfSaltApp" inputmode="decimal" placeholder="$35">
+          <div class="hint">Added to a visit only when the crew put salt down there.</div>
+        </div>
+        <label class="chk mt"><input type="checkbox" id="sfSaltOn" onchange="snowFormToggle()"> Part of the visit price is salt</label>
+        <div class="field" id="sfSaltRow" hidden><span class="label">How much of it is salt</span>
+          <input id="sfSaltAmt" inputmode="decimal" placeholder="$100">
+          <div class="hint">Shown as its own line on every visit, so salt revenue is visible.</div>
+        </div>
       </div>
 
       <div class="form-section-label">Service</div>
