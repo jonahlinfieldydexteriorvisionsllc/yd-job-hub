@@ -208,8 +208,10 @@
     if (r.whose !== 'personal' && allLinesOff(r) === 'amenity') return 'amenity';
     if (r.suggest && r.suggest.jobId) return 'job';
     // Claude read it as clearly a household's (a photo still to sort --
-    // the email reader files those itself, functions/receipts.py).
-    if (r.whose === 'personal') return 'personal';
+    // the email reader files those itself, functions/receipts.py) -- but a
+    // loan payment starts on Loan payment, his home's included (Jonah,
+    // 10 Nov 2026: "Send them too"; receipts.py _file_personal).
+    if (r.whose === 'personal' && r.kind !== 'loan_payment') return 'personal';
     return DEST_OF_KIND[r.kind] || 'job';
   }
   // The vehicles and machines on the Equipment tab, vehicles first.
@@ -1983,7 +1985,7 @@
     if (to === 'loan') {
       return '<div class="rc-assign">' + btn('Add ' + n + 'to loan payments') + '</div>' +
         '<div class="rc-hint">Counted under All receipts → 🏦 Loans, by the lender’s name, and sent to QuickBooks like ' +
-        'any receipt. A loan for your home goes under 👤 Personal instead.</div>';
+        'any receipt, home loans included.</div>';
     }
     if (to === 'sub') {
       // The owner picks which of his subcontractors (the one whose name the

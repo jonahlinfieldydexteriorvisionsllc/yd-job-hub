@@ -1704,6 +1704,11 @@ def _file_personal(db, rid, got, m=None):
     Returns True when the receipt is (now) filed only under Personal."""
     if got.get("whose") != "personal" or is_office_store(got.get("vendor")) or _bill_place(db, got.get("vendor")):
         return False
+    # A loan payment is never Personal by itself, his home's included: Jonah,
+    # 10 Nov 2026, of his mortgage and HVAC loan, "Send them too". It waits
+    # to sort (which loan) and goes on to QuickBooks like any receipt.
+    if got.get("kind") == LOAN_KIND:
+        return False
     if _a_subs_bill(db, got, m):
         return False
     ref = db.collection("receipts").document(rid)
@@ -2842,10 +2847,11 @@ def from_photo(client, body, uid, who):
     # waits in Receipts to sort for a person to say.
     if got.get("doc_type") == "person_payment":
         return {"error": "That's a payment to a person, not a receipt — not added"}, usage
-    personal = got.get("whose") == "personal"
     # A loan payment likewise waits for a person to say which loan, but goes
-    # on to QuickBooks like any receipt (Jonah, 10 Nov 2026).
+    # on to QuickBooks like any receipt, a loan on his home included (Jonah,
+    # 10 Nov 2026), so it is never read as personal here (_file_personal).
     loan = got.get("kind") == LOAN_KIND
+    personal = got.get("whose") == "personal" and not loan
     db = dg._db()
     jobs = _jobs(db)
     rid, what = _save(db, m, got, jobs)
