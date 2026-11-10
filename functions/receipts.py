@@ -2425,6 +2425,12 @@ def forward_to_qb(db, rid, raw=None, mime=None):
             lines.append("Total: " + money)
         if r.get("date"):
             lines.append("Date: " + str(r["date"])[:10])
+        # A vehicle's service: the truck and what its odometer said.
+        sent = r.get("sentFor") or {}
+        if sent.get("to") == "vehicle" and sent.get("name"):
+            lines.append("Vehicle: " + str(sent["name"]))
+            if _odometer(sent.get("odometer")) is not None:
+                lines.append("Odometer: {:,} miles".format(_odometer(sent["odometer"])))
         if r.get("addedByName"):
             lines.append("Sent in by: " + str(r["addedByName"]))
         msg.attach(MIMEText("\n".join(lines), "plain", "utf-8"))
@@ -2928,6 +2934,20 @@ PLACES_NOT_JOB = ("vehicle", "shop", "office")
 ADD_UP_CENTS = 3
 
 
+ODOMETER_MAX = 2000000      # = receipts.js ODO_MAX
+
+
+def _odometer(v):
+    """A whole number of miles, 1 to ODOMETER_MAX, or None."""
+    if isinstance(v, bool):
+        return None
+    try:
+        n = int(str(v).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    return n if 0 < n <= ODOMETER_MAX else None
+
+
 def _sent_for(db, body, jobs, uid, who):
     """Where the sender says the photo is for, checked. A 'problem' key says
     why it cannot go there by itself (taken off before it is saved)."""
@@ -2954,6 +2974,13 @@ def _sent_for(db, body, jobs, uid, who):
             out["equipmentId"], out["name"] = eid, ((g.to_dict() or {}).get("name") or "Vehicle")[:120]
         else:
             out["problem"] = "which vehicle it was for wasn't said"
+        # What the odometer said, typed in as the photo was taken (Jonah,
+        # 10 Nov 2026: "whenever a receipt is entered for service for a
+        # vehicle odometer needs to be entered"). The app puts it on the
+        # receipt's vehicle line as it files it (receipts.js autoSort).
+        odo = _odometer(body.get("odometer"))
+        if odo is not None:
+            out["odometer"] = odo
     elif out["to"]:
         out["name"] = {"shop": "Shop overhead", "office": "Office overhead"}[out["to"]]
     else:

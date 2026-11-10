@@ -222,6 +222,83 @@
       .sort((a, b) => (cm(b) - cm(a)) || String(a.name || '').localeCompare(String(b.name || '')));
   }
 
+  // Jonah, 10 Nov 2026: "whenever a receipt is entered for service for a
+  // vehicle odometer needs to be entered". A receipt put on a vehicle that
+  // counts miles, for anything but fuel, carries what the odometer said:
+  // `odometer` (+ odometerAt, odometerBy) on its vehicle line in `splits`,
+  // which every way of filing writes already -- so no new field on the
+  // receipt. Asked when a vehicle is picked for a photo (rcForPick), when one
+  // is filed on a vehicle by hand (assignHtml), and, while still missing,
+  // under "Odometer needed" on the Receipts tab, the truck's page and Home.
+  // The truck's own miles move up to it (equipment.js milesFromReceipt).
+  // Receipts dated before November are never asked: nobody knows those now.
+  const ODOMETER_FROM = '2026-11-01';
+  const ODO_MAX = 2000000;
+  const odoDraft = {};         // receipt id (or 'new_' + id) + split -> the reading typed so far
+  const SKIP_ODO = '__skip';   // in odoDraft: "Not a service" was tapped while filing
+  // A machine in Equipment's Vehicles group (a trailer counts miles but has
+  // no odometer), judged by the same rule for the owner, from the machines,
+  // and for crew, from the crew's list (settings/public.equipmentList).
+  function milesVehicle(id) {
+    if (!id || !window.YDEquipment || !YDEquipment.categoryOf) return false;
+    const g = (YDEquipment.all() || {})[id] || (publicGear && publicGear[id]);
+    return !!g && YDEquipment.categoryOf(g) === 'vehicle';
+  }
+  // What the read called it: a repair, parts or upkeep (and what it couldn't
+  // tell) is a service; fuel, insurance, a plate renewal and the like aren't.
+  const ODO_KINDS = ['vehicle', 'equipment_and_repairs', 'other'];
+  // Whether this receipt is one the odometer is asked for at all.
+  const odoAsked = r => !!r && ODO_KINDS.indexOf(r.kind || 'other') !== -1 &&
+    String(r.date || r.createdAt || '').slice(0, 10) >= ODOMETER_FROM;
+  // Its vehicle lines still without a reading -- filed, or part filed, only.
+  // One marked "Not a service" (odometerSkip) is never asked again.
+  function odoMissing(r) {
+    if (!odoAsked(r) || ['filed', 'tosort'].indexOf(stageOf(r).id) === -1) return [];
+    return (r.splits || []).filter(s => s && s.to === 'vehicle' && s.odometer == null && !s.odometerSkip &&
+      milesVehicle(s.equipmentId));
+  }
+  // "144,491", "144491 mi" -> 144491; anything else -> null.
+  function readOdo(v) {
+    const t = String(v == null ? '' : v).replace(/[,\s]|mi(les)?$/gi, '');
+    if (!/^\d+$/.test(t)) return null;
+    const n = Number(t);
+    return n > 0 && n <= ODO_MAX ? n : null;
+  }
+  const fmtMiles = n => Number(n).toLocaleString('en-US');
+  // The truck's miles up to the reading (only forward; equipment.js
+  // milesFromReceipt): 'moved' | 'far' | 'lower', or '' when this device
+  // couldn't (Equipment not loaded, or no Equipment change) -- then the line
+  // keeps no `odometerToTruck` and odoSweep, on a device that can, does it
+  // later. Marked once taken, so a reading never goes to the truck twice
+  // (a mistyped one would undo his fix of the miles on Equipment).
+  const truckMiles = (equipmentId, n) =>
+    (window.YDEquipment && YDEquipment.milesFromReceipt ? YDEquipment.milesFromReceipt(equipmentId, n) : '') || '';
+  const truckWords = res => res === 'far'
+    ? ' (far past its last reading, so its miles on Equipment were left — change them there if it’s right)' : '';
+  function odoSweep() {
+    if (!sorts() || !ydCan('equipment', 'change') || !window.YDEquipment || !YDEquipment.milesFromReceipt) return;
+    const gear = YDEquipment.all() || {};
+    allReceipts().forEach(r => {
+      let changed = false;
+      const splits = (r.splits || []).map(s => {
+        if (!s || s.to !== 'vehicle' || s.odometer == null || s.odometerToTruck || !gear[s.equipmentId]) return s;
+        const res = truckMiles(s.equipmentId, s.odometer);
+        if (!res) return s;
+        changed = true;
+        return Object.assign({}, s, { odometerToTruck: res });
+      });
+      if (!changed) return;
+      receipts[r.id] = Object.assign({}, receipts[r.id], { splits });
+      write(r.id, { splits });
+    });
+  }
+  let odoSweepTimer = 0;
+  const odoSweepSoon = () => { clearTimeout(odoSweepTimer); odoSweepTimer = setTimeout(odoSweep, 3000); };
+  document.addEventListener('yd-receipts', odoSweepSoon);
+  // Equipment arriving decides which lines need a reading (milesVehicle):
+  // the list at the top is drawn again then.
+  document.addEventListener('yd-equipment-changed', () => { odoSweepSoon(); redraw(); });
+
   const sees = () => typeof ydCan === 'function' && ydCan('jobs', 'see');
   const sorts = () => typeof ydCan === 'function' && ydCan('jobs', 'change');
 
@@ -618,6 +695,18 @@
       const g = id && gearList().find(x => x.id === id);
       if (!g) { showToast('Pick the vehicle first'); return false; }
       target = { equipmentId: g.id, name: g.name || 'Vehicle' };
+      // A service on a vehicle: what the odometer said goes with it.
+      if (odoAsked(r) && milesVehicle(g.id)) {
+        const said = odoDraft['new_' + rid];
+        const n = readOdo(said);
+        const stamp = { odometerAt: new Date().toISOString(), odometerBy: (me() || {}).uid || '' };
+        if (said === SKIP_ODO) Object.assign(target, { odometerSkip: true }, stamp);
+        else if (n == null) {
+          showToast('Type what the odometer said at the service — or tap Not a service');
+          const b = el('rcOdoNew_' + rid); if (b) b.focus();
+          return false;
+        } else Object.assign(target, { odometer: n }, stamp);
+      }
     } else if (to === 'sub') {
       // One set up under Subcontractors (subs.js reads its bills by subId),
       // else by the store's name -- an admin has no list, and subs.js still
@@ -638,8 +727,14 @@
     r = off.r;
     if (off.none) return !!finishSplitOff(rid, r, off, auto);
     const p = portion(rid, r);
-    if (!p) return false;
+    if (!p) { if (target.odometerSkip) delete odoDraft['new_' + rid]; return false; }
     if (!auto) learnLines(r, p.idxs, to, hand);
+    // The reading to the truck's miles, once, as the line is made.
+    let odoRes = '';
+    if (to === 'vehicle' && target.odometer != null) {
+      odoRes = truckMiles(target.equipmentId, target.odometer);
+      if (odoRes) target = Object.assign({}, target, { odometerToTruck: odoRes });
+    }
     const splits = (r.splits || []).concat([Object.assign({
       id: 'sp' + Date.now().toString(36) + uid(), to: to, lines: p.idxs, cents: p.part, taxCents: p.tax,
       at: new Date().toISOString(), by: (me() || {}).uid || '',
@@ -649,8 +744,13 @@
     receipts[rid] = Object.assign({}, r, patch);
     delete ticked[rid];
     write(rid, Object.assign({}, patch));
+    let odoSaid = '';
+    if (to === 'vehicle' && (target.odometer != null || target.odometerSkip)) {
+      delete odoDraft['new_' + rid];
+      if (target.odometer != null) odoSaid = ' · ' + fmtMiles(target.odometer) + ' miles' + truckWords(odoRes);
+    }
     showToast((auto ? '🧾 ' + (r.vendor || 'Receipt') + ' ' : '') + money(p.part + p.tax) + ' → ' + target.name +
-      (auto ? ' (sent in for it)' : '') + (off.said ? ' · ' + off.said : ''), off.said ? 5000 : undefined);
+      (auto ? ' (sent in for it)' : '') + odoSaid + (off.said ? ' · ' + off.said : ''), off.said || odoSaid ? 5000 : undefined);
     redraw(true);
     return true;
   }
@@ -834,8 +934,12 @@
     if (byNote && ticked[rid] && !ticked[rid].size) ok = false;
     else if (f.to === 'job') ok = !!addToJob(rid, fresh, f.jobId, done);
     else if (f.to === 'vehicle' || f.to === 'shop' || f.to === 'office') {
+      // The odometer typed in when the photo was taken goes on with it.
+      const odo = f.to === 'vehicle' ? readOdo(f.odometer) : null;
       ok = assignElsewhere(rid, fresh, f.to, f.to === 'vehicle'
-        ? { equipmentId: f.equipmentId || '', name: f.name || 'Vehicle' } : { name: f.name || DEST_NAME[f.to] }, done);
+        ? Object.assign({ equipmentId: f.equipmentId || '', name: f.name || 'Vehicle' },
+            odo != null ? { odometer: odo, odometerAt: f.at || at, odometerBy: f.by || '' } : {})
+        : { name: f.name || DEST_NAME[f.to] }, done);
     }
     delete splitting[rid];
     if (!ok) {
@@ -1669,6 +1773,78 @@
       (row ? ' title="' + words + '" aria-label="' + words + '"' : '') +
       ' onclick="rcNote(\'' + where + rid + '\')">' + (row ? '📝' : '📝 ' + words) + '</button>';
   }
+  // Vehicle receipts still without the odometer (odoMissing), at the top of
+  // the list: each with its box. One per vehicle line of a receipt.
+  function odoItems() {
+    const items = [];
+    allReceipts().forEach(r => odoMissing(r).forEach(s => items.push({ r, s })));
+    return items.sort((a, b) => String(b.r.date || '').localeCompare(String(a.r.date || '')));
+  }
+  function odoHtml() {
+    if (!sorts()) return '';
+    const items = odoItems();
+    if (!items.length) return '';
+    return '<div class="rc-odo"><div class="rc-odo-head">🚚 <b>Odometer needed</b> — ' + items.length + ' vehicle receipt' +
+        (items.length === 1 ? '' : 's') + '</div>' +
+      items.map(({ r, s }) => {
+        const k = r.id + '_' + s.id, g = window.YDEquipment && (YDEquipment.all() || {})[s.equipmentId];
+        const save = 'rcOdoSave(\'' + r.id + '\',\'' + safeId(s.id) + '\')';
+        return '<div class="rc-odo-row"><div class="rc-odo-what"><b>' + esc(r.vendor || 'Receipt') + '</b> ' +
+            money((s.cents || 0) + (s.taxCents || 0)) + (r.date ? ' · ' + esc(fmtDateMD(String(r.date).slice(0, 10))) : '') +
+            ' · ' + esc(s.name || 'Vehicle') +
+            '<span class="rc-odo-last">The reading on the day of the service' +
+              (g && g.miles != null ? ' · its miles on Equipment now: ' + fmtMiles(g.miles) : '') + '</span></div>' +
+          '<div class="rc-odo-go"><input class="rc-odo-in" id="rcOdo_' + k + '" inputmode="numeric" autocomplete="off"' +
+            ' placeholder="Odometer" aria-label="Odometer for ' + esc(r.vendor || 'this receipt') + '" value="' + esc(odoDraft[k] || '') + '"' +
+            ' oninput="rcOdoTyped(\'' + k + '\', this.value)"' +
+            ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();' + save + '}">' +
+          '<button class="btn btn-sm btn-filled" onclick="' + save + '">Save</button></div>' +
+          '<button type="button" class="link-btn rc-odo-skip" onclick="rcOdoSkip(\'' + r.id + '\',\'' + safeId(s.id) + '\')">' +
+            'Not a service — no odometer</button></div>';
+      }).join('') + '</div>';
+  }
+  window.rcOdoTyped = function (k, text) { odoDraft[k] = text; };
+  window.rcOdoSave = function (rid, sid) {
+    if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
+    const r = receipts[rid];
+    const s = r && (r.splits || []).find(x => x && x.id === sid);
+    if (!s) { redraw(true); return; }
+    const k = rid + '_' + sid, box = el('rcOdo_' + k);
+    const n = readOdo(box ? box.value : odoDraft[k]);
+    if (n == null) { showToast('Type what the odometer said, in miles'); if (box) box.focus(); return; }
+    const res = truckMiles(s.equipmentId, n);
+    odoLine(rid, sid, Object.assign({ odometer: n }, res ? { odometerToTruck: res } : {}));
+    delete odoDraft[k];
+    showToast('🚚 ' + fmtMiles(n) + ' miles on ' + (s.name || 'the vehicle') + truckWords(res), 5000);
+    if (box) box.blur();
+    redraw(true);
+  };
+  // "Not a service" (a plate renewal, a part never fitted): no reading, and
+  // never asked again -- his way out, so a receipt can't nag forever.
+  window.rcOdoSkip = function (rid, sid) {
+    if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
+    if (!odoLine(rid, sid, { odometerSkip: true })) return;
+    delete odoDraft[rid + '_' + sid];
+    showToast('No odometer for this one');
+    redraw(true);
+  };
+  window.rcAssignNoOdo = function (rid) {
+    const k = 'new_' + rid, was = odoDraft[k];
+    odoDraft[k] = SKIP_ODO;
+    window.rcAssign(rid);
+    if (odoDraft[k] === SKIP_ODO) odoDraft[k] = was || '';
+  };
+  // One vehicle line of a receipt changed, with who and when.
+  function odoLine(rid, sid, fields) {
+    const r = receipts[rid];
+    if (!r || !(r.splits || []).some(x => x && x.id === sid)) { redraw(true); return false; }
+    const splits = (r.splits || []).map(x => x && x.id === sid
+      ? Object.assign({}, x, fields, { odometerAt: new Date().toISOString(), odometerBy: (me() || {}).uid || '' }) : x);
+    receipts[rid] = Object.assign({}, r, { splits });
+    write(rid, { splits });
+    return true;
+  }
+
   // The bar at the top: how many notes wait for Claude, and the button that
   // has it go through them now rather than on Friday.
   function notesBarHtml() {
@@ -1976,7 +2152,17 @@
           '<option value="">Which vehicle or machine?</option>' +
           gear.map(g => '<option value="' + safeId(g.id) + '"' + (g.id === cur ? ' selected' : '') + '>' +
             esc(g.name || 'Machine') + '</option>').join('') +
-        '</select>' + btn('Add ' + n + 'to vehicle') + '</div>';
+        '</select>' +
+        // A service on a vehicle needs its odometer (ODOMETER_FROM); a
+        // machine on hours, or fuel, doesn't.
+        (odoAsked(r) ? '<input class="rc-odo-in" id="rcOdoNew_' + rid + '" inputmode="numeric" autocomplete="off"' +
+          ' placeholder="Odometer at the service" aria-label="Odometer at the service"' +
+          ' value="' + esc(odoDraft['new_' + rid] === SKIP_ODO ? '' : odoDraft['new_' + rid] || '') + '"' +
+          ' oninput="rcOdoTyped(\'new_' + rid + '\', this.value)"' +
+          ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();rcAssign(\'' + rid + '\')}">' : '') +
+        btn('Add ' + n + 'to vehicle') +
+        (odoAsked(r) ? '<button type="button" class="link-btn rc-odo-skip" onclick="rcAssignNoOdo(\'' + rid + '\')">' +
+          'Not a service — no odometer</button>' : '') + '</div>';
     }
     if (to === 'personal') {
       return '<div class="rc-assign">' + btn('Mark ' + (n || ((r.splits || []).length ? 'the rest ' : '')) + 'personal') + '</div>' +
@@ -2263,7 +2449,7 @@
         (checking ? 'Checking email…' : '📧 Check email now') + '</button>' : '') + stateHtml() + qbAddressHtml() +
       notesBarHtml();
     el('rcList').innerHTML = !loaded ? '<p class="empty-msg">Loading receipts…</p>'
-      : (open.length ? open.map(r => cardHtml(r, jobs)).join('')
+      : odoHtml() + (open.length ? open.map(r => cardHtml(r, jobs)).join('')
         : '<p class="empty-msg">Nothing ' + (old.length ? 'new ' : '') + 'to sort. Receipts that arrive by email show up here by themselves.</p>') +
         pulledHtml(old, jobs) +
         '<datalist id="rcWhyIdeas">' + WHY_IDEAS.map(w => '<option value="' + esc(w) + '">').join('') + '</datalist>';
@@ -2621,6 +2807,10 @@
     },
     // Bills not paid yet (Invoices to pay), for Home.
     toPay: () => allReceipts().filter(toPayNow),
+    // Vehicle receipts still without the odometer: how many (Home), and a
+    // receipt's vehicle lines missing it (the truck's page, equipment.js).
+    odometerNeeded: () => (sorts() ? odoItems().length : 0),
+    odometerMissing: r => odoMissing(r),
     // A receipt's tags by name, for the app's search (search.js).
     tagNames: tagNames,
     loaded: () => loaded,
@@ -2752,9 +2942,12 @@
     }
     return m;
   }
+  // A vehicle that counts miles was picked: its odometer is asked before the
+  // camera opens (ODOMETER_FROM; Jonah, 10 Nov 2026). Fuel skips it.
+  let odoFor = null;
   function openFor(queueId) {
     changing = queueId || null;
-    pickVehicles = false; pickSearch = '';
+    pickVehicles = false; pickSearch = ''; odoFor = null;
     forModal().classList.add('active');
     drawFor();
     if (!publicGear && !gearLoading && !gearList().length && window.YDDb) {
@@ -2767,6 +2960,7 @@
   }
   window.rcForClose = function () {
     const m = el('rcForModal'); if (m) m.classList.remove('active');
+    odoFor = null;
     // A held photo whose window was closed without an answer keeps the
     // place it had, and goes.
     if (changing && rq[changing]) { rq[changing].holdUntil = 0; rqKeep(rq[changing]); sendQueued(); }
@@ -2784,6 +2978,25 @@
     if (!body) return;
     const tap = (args, label, cls) => '<button type="button" class="rc-for-btn' + (cls ? ' ' + cls : '') +
       '" onclick="rcForPick(' + args + ')">' + label + '</button>';
+    if (odoFor) {
+      body.innerHTML = '<p class="rc-for-lead">What does the odometer on <b>' + esc(odoFor.forName) + '</b> say?</p>' +
+        '<input type="text" id="rcForOdo" class="rc-for-find" inputmode="numeric" autocomplete="off" placeholder="Odometer (miles)"' +
+          ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();rcForOdoGo(true)}">' +
+        '<div class="rc-for-grid">' +
+          '<button type="button" class="rc-for-btn on" onclick="rcForOdoGo(true)">' +
+            (changing ? '✓ Save the reading' : '📷 Repair or service — take the photo') + '</button>' +
+          '<button type="button" class="rc-for-btn" onclick="rcForOdoGo(false)">' +
+            (changing ? '⛽ Fuel — no odometer' : '⛽ Fuel — take the photo') + '</button>' +
+        '</div>' +
+        '<p class="hint">The reading on the day of the repair or service. Fuel doesn’t need one.</p>' +
+        '<button type="button" class="link-btn" onclick="rcForBack()">← Back</button>';
+      // Straight to the box -- but not on a phone, where the keyboard would
+      // cover the buttons before the reading is even looked up.
+      if (!(window.matchMedia && matchMedia('(pointer: coarse)').matches)) {
+        const b = el('rcForOdo'); if (b) b.focus();
+      }
+      return;
+    }
     if (pickVehicles) {
       const list = vehicles();
       body.innerHTML = '<p class="rc-for-lead">Which vehicle or machine?</p>' +
@@ -2820,7 +3033,10 @@
     const f = el('rcForFind');
     if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
   };
-  window.rcForBack = function () { pickVehicles = false; drawFor(); };
+  window.rcForBack = function () {
+    if (odoFor) { odoFor = null; pickVehicles = true; } else pickVehicles = false;
+    drawFor();
+  };
   window.rcForPick = function (to, id) {
     if (to === 'vehicles') { pickVehicles = true; drawFor(); return; }
     let f;
@@ -2831,14 +3047,31 @@
     } else if (to === 'vehicle') {
       const v = vehicles().find(x => x.id === id);
       f = { forTo: 'vehicle', equipmentId: v ? v.id : '', how: 'picked', forName: v ? v.name : 'a vehicle' };
+      if (v && milesVehicle(v.id)) { odoFor = f; drawFor(); return; }
     } else if (to === 'shop' || to === 'office') {
       f = { forTo: to, how: 'picked', forName: to === 'shop' ? 'the shop' : 'the office' };
     } else return;
+    forPicked(f);
+  };
+  // The odometer step's two buttons: with the reading, or fuel without one.
+  // Still a tap, so a phone opens the camera from it.
+  window.rcForOdoGo = function (withReading) {
+    const f = odoFor;
+    if (!f) return;
+    if (withReading) {
+      const box = el('rcForOdo'), n = readOdo(box && box.value);
+      if (n == null) { showToast('Type what the odometer says, or tap Fuel'); if (box) box.focus(); return; }
+      f.odometer = n;
+    }
+    odoFor = null;
+    forPicked(f);
+  };
+  function forPicked(f) {
     const m = el('rcForModal'); if (m) m.classList.remove('active');
     if (changing && rq[changing]) {
       const it = rq[changing];
       changing = null;
-      Object.assign(it, { forTo: '', jobId: '', equipmentId: '' }, f, { holdUntil: 0 });
+      Object.assign(it, { forTo: '', jobId: '', equipmentId: '', odometer: null }, f, { holdUntil: 0 });
       rqKeep(it);
       showToast('🧾 Receipt for ' + f.forName);
       sendQueued();
@@ -2848,7 +3081,7 @@
     nextFor = f;
     // Still the same tap: a phone opens the camera only from one.
     openCamera();
-  };
+  }
   // The bar's Change, for the photo held there.
   window.rcChangeFor = function (id) {
     const it = rq[id];
@@ -2898,7 +3131,7 @@
   // Only what is kept is kept: the state words are this visit's.
   const rqKeep = it => rqTx('readwrite', s => s.put({ id: it.id, by: it.by, mediaType: it.mediaType, data: it.data,
     jobId: it.jobId || '', forTo: it.forTo || '', equipmentId: it.equipmentId || '', how: it.how || '', forName: it.forName || '',
-    holdUntil: it.holdUntil || 0, at: it.at, tries: it.tries || 0, failed: it.state === 'failed' ? it.error || 'Not read' : '' }))
+    odometer: it.odometer != null ? it.odometer : null, holdUntil: it.holdUntil || 0, at: it.at, tries: it.tries || 0, failed: it.state === 'failed' ? it.error || 'Not read' : '' }))
     .catch(e => console.warn('[receipts] photo kept in memory only:', e));
   const rqDrop = id => rqTx('readwrite', s => s.delete(id)).catch(() => {});
   const rqLoad = () => rqTx('readonly', s => s.getAll()).catch(() => []);
@@ -2918,6 +3151,7 @@
     const it = { id: 'rq' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), by: myUid(),
                  mediaType: photo.mediaType, data: photo.data, forTo: where.forTo || '', jobId: where.jobId || '',
                  equipmentId: where.equipmentId || '', how: where.how || '', forName: where.forName || '',
+                 odometer: where.odometer != null ? where.odometer : null,
                  holdUntil: where.hold ? Date.now() + HOLD_MS : 0, at: new Date().toISOString(),
                  state: 'waiting', error: '', tries: 0 };
     rq[it.id] = it;
@@ -2953,7 +3187,8 @@
         drawSendBar();
         try {
           const r = await window.YDClaude.post('/receipts/photo', { mediaType: it.mediaType, data: it.data,
-            jobId: it.jobId || '', forTo: it.forTo || '', equipmentId: it.equipmentId || '', how: it.how || '' });
+            jobId: it.jobId || '', forTo: it.forTo || '', equipmentId: it.equipmentId || '', how: it.how || '',
+            odometer: it.forTo === 'vehicle' && it.odometer != null ? it.odometer : null });
           delete rq[it.id];
           rqDrop(it.id);
           showToast(photoSaid(r, it), 6000);

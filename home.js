@@ -1236,6 +1236,11 @@
       }
       if (old) rows.push(line('📥', '<b>' + plural(old, 'receipt') + ' from earlier this year</b>', 'From the email pull — put each on its job', '',
         "switchTab('receipts')"));
+      // Vehicle receipts still without the odometer (receipts.js; Jonah,
+      // 10 Nov 2026: "odometer needs to be entered").
+      const odo = YDReceipts.odometerNeeded ? YDReceipts.odometerNeeded() : 0;
+      if (odo) rows.push(line('🚚', '<b>' + plural(odo, 'vehicle receipt') + ' need' + (odo === 1 ? 's' : '') + ' the odometer</b>',
+        'Type what the odometer said — at the top of Receipts', '', "switchTab('receipts')"));
       // Bills the email reader found not paid yet (receipts.js payHtml) --
       // not the year's pull, most of which were paid long ago. Late first.
       const bills = (YDReceipts.toPay ? YDReceipts.toPay() : []).filter(r => r && !r.pulled);

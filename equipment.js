@@ -134,6 +134,9 @@
 
   // How close to due counts as "coming up". Different units, same idea.
   const SOON = { days: 30, hours: 10, miles: 500 };
+  // A receipt's odometer more than this past the vehicle's last reading is
+  // not taken as its miles (milesFromReceipt): more likely a typo.
+  const MILES_JUMP = 20000;
 
   // How urgent a noted problem is, most urgent first. Worded the way it gets
   // said in the yard, because the point is that anyone picking up the keys
@@ -851,7 +854,12 @@
       '<div class="eq-log">' + rows.slice(0, 15).map(x => '<div class="eq-log-row eq-rc-row">' +
         '<span class="eq-log-when">' + shortDate(x.r.date) + '</span>' +
         '<span class="eq-log-what"><b>' + esc(x.r.vendor || 'Receipt') + '</b>' +
-          (x.r.summary ? '<span class="eq-log-sub">' + esc(x.r.summary) + '</span>' : '') + '</span>' +
+          (x.r.summary ? '<span class="eq-log-sub">' + esc(x.r.summary) + '</span>' : '') +
+          // What the odometer said (receipts.js; Jonah, 10 Nov 2026), or
+          // that it is still to be typed in on the Receipts tab.
+          (x.s.odometer != null ? '<span class="eq-log-sub">' + fmtNum(x.s.odometer) + ' miles</span>'
+            : (YDReceipts.odometerMissing && YDReceipts.odometerMissing(x.r).some(s => s.id === x.s.id)
+              ? '<span class="eq-log-sub eq-odo-missing">Odometer needed — on the Receipts tab</span>' : '')) + '</span>' +
         '<span class="eq-log-cost">' + money(cents(x)) + '</span>' +
         (x.r.link && /^https:\/\/mail\.google\.com\//.test(x.r.link)
           ? '<a class="btn btn-sm" href="' + esc(x.r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
@@ -2161,6 +2169,28 @@
       });
       if (n) { renderEquipment(); scheduleMaintSync(); }
       return n;
+    },
+    // What the odometer said on a vehicle's receipt (receipts.js; Jonah,
+    // 10 Nov 2026): the vehicle's miles move up to it -- meters only go
+    // forward, and a reading past MILES_JUMP over the last one is kept on
+    // the receipt but not taken (a slip of a finger would stick, since the
+    // miles never come back down). Not a service in the history: a repair
+    // must not restart the oil change's countdown (dueFromHistory).
+    // Returns 'moved', 'far', 'lower' (an older reading, written up late:
+    // kept on the receipt only), or '' when this device couldn't look
+    // (not loaded, or no Equipment change) -- receipts.js tries again then.
+    milesFromReceipt: (id, miles) => {
+      const g = gear[id];
+      if (!g || !ydCan('equipment', 'change') || !(miles > 0)) return '';
+      if (!countsMiles(g)) return 'lower';
+      if (g.miles != null && miles <= g.miles) return 'lower';
+      if (g.miles != null && miles - g.miles > MILES_JUMP) return 'far';
+      const patch = { miles: miles };
+      Object.assign(g, patch);
+      write(g.id, patch, 'the odometer on a receipt');
+      if (equipmentShowing()) renderEquipment();
+      if (openId === g.id && !editingId && !notingIssue && !el('svWhat')) renderDetail();
+      return 'moved';
     },
     // A recurring task confirmed done (recurring.js): in the history as a
     // task, with the miles if given -- it does not move the next service.

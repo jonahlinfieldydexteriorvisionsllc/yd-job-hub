@@ -6446,3 +6446,25 @@ html[data-bids-page] #panel-boards .section-head { display: none; }
   .sr-row { flex-direction:column; align-items:flex-start; gap:2px; }
   .sr-row span { max-width:100%; text-align:left; }
 }
+
+/* ---- Receipts: the odometer on a vehicle's service receipt (receipts.js
+   odoHtml, assignHtml; equipment.js receiptsHtml). One box per receipt
+   still missing it, at the top of the list; 16px words so an iPhone
+   doesn't zoom in, 44px to tap; a phone puts the box under the words. ---- */
+.rc-odo { margin:0 0 14px; padding:8px 12px; border:1.5px solid var(--accent); border-radius:10px; background:var(--surface); }
+.rc-odo-head { font-size:15px; margin:2px 0 4px; }
+.rc-odo-row { border-top:1px solid var(--border); padding:9px 0; display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between; }
+.rc-odo-what { flex:1 1 260px; min-width:0; font-size:14px; overflow-wrap:anywhere; }
+.rc-odo-last { display:block; color:var(--muted); font-size:13px; }
+.rc-odo-go { display:flex; gap:6px; align-items:center; flex:0 1 auto; }
+.rc-odo-in { width:9.5em; max-width:100%; min-height:44px; font-size:16px; }
+.rc-odo-go .btn { min-height:44px; }
+.eq-odo-missing { color:var(--st-now, #b42318); font-weight:600; }
+@media (max-width:720px) {
+  .rc-odo-go { flex:1 1 100%; }
+  .rc-odo-go .rc-odo-in { flex:1 1 auto; width:auto; min-width:0; }
+  .rc-assign .rc-odo-in { flex:1 1 100%; width:100%; }
+}
+.rc-odo-skip { flex:1 1 100%; text-align:left; min-height:44px; font-size:13px; }
+.rc-assign .rc-odo-skip { flex:0 1 auto; }
+.rc-assign .rc-odo-in { width:13.5em; }
