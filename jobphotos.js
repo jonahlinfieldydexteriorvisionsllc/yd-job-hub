@@ -214,6 +214,12 @@
   // the job but on no wrong job, and a farm or a big lot can run past a mile.
   // "It's right" (placeOk) clears it for good.
   const offJob = (p, v) => !!v && v.kind === 'other' && !(p && p.placeOk);
+  // A photo Claude put on a job from iCloud without being sure which of two
+  // nearby jobs it was (the photo sort, .claude/photosort): flagged the same
+  // way until it is moved or marked right.
+  const unsureJob = p => !!(p && p.fromICloud && p.fromICloud.unsure && !p.placeOk &&
+    Array.isArray(p.fromICloud.alt) && p.fromICloud.alt.length && seesJobs());
+  const flagged = (p, v) => offJob(p, v) || unsureJob(p);
   // "Pat Smith’s address (Paver patio job)": whose, and which of their
   // jobs, since one customer can have several.
   function jobName(j) {
@@ -253,6 +259,21 @@
       // strips it). A photo from before 9 Nov 2026 was never read: nothing said.
       parts.push('📍 No location in this photo');
     }
+    // Put here by the iCloud photo sort: says so, and why, so a wrong one can
+    // be traced; unsure between jobs, a move to each of the others.
+    const ic = p.fromICloud;
+    if (ic && seesJobs() && !p.pending) {
+      parts.push('📲 Put here by Claude from iCloud' + (ic.why ? ': ' + esc(ic.why) : ''));
+      if (unsureJob(p)) {
+        parts.push('⚠️ Not sure it’s this job. It could be ' + ic.alt.map(a => esc(a.name || 'another job')).join(' or '));
+        ic.alt.forEach(a => {
+          if (can && a.jobId && a.jobId !== p.jobId && jobRecord(a.jobId) && !btns.some(b => b.indexOf('\'' + safe(a.jobId) + '\')') > -1)) {
+            btns.push(moveBtn(p, a.jobId, 'Move it to ' + (a.name || 'that job')));
+          }
+        });
+        if (can && !btns.some(b => b.indexOf('jpPlaceOk') > -1)) btns.push('<button type="button" class="btn" onclick="jpPlaceOk(\'' + safe(p.id) + '\')">It’s right</button>');
+      }
+    }
     const from = p.movedFrom && p.movedFrom.jobId;
     if (from && seesJobs() && !p.pending) {
       const was = jobRecord(from);
@@ -260,7 +281,7 @@
       if (can && was && from !== p.jobId && !btns.some(b => b.indexOf('\'' + safe(from) + '\')') > -1)) btns.push(moveBtn(p, from, 'Move it back'));
     }
     if (!parts.length) return '';
-    return '<div class="jp-v-place' + (offJob(p, v) ? ' off' : '') + '"><span>' + parts.join(' · ') + '</span>' + btns.join('') + '</div>';
+    return '<div class="jp-v-place' + (flagged(p, v) ? ' off' : '') + '"><span>' + parts.join(' · ') + '</span>' + btns.join('') + '</div>';
   }
   window.jpPlaceOk = id => {
     const p = photos[id];
@@ -291,14 +312,18 @@
     // about that job still means it).
     const home = !!(p.movedFrom && p.movedFrom.jobId === to);
     const homeNum = home && Number.isInteger(p.movedFrom.num) ? p.movedFrom.num : null;
-    patch(id, { jobId: to, num: homeNum, placeOk: null,
-                movedFrom: home ? null : { jobId: from, num: oldNum, at: new Date().toISOString(), by: myUid() } });
+    // A move settles an unsure iCloud photo: it is where someone put it now.
+    const icUnsure = !!(p.fromICloud && p.fromICloud.unsure);
+    patch(id, Object.assign({ jobId: to, num: homeNum, placeOk: null,
+                movedFrom: home ? null : { jobId: from, num: oldNum, at: new Date().toISOString(), by: myUid() } },
+                icUnsure ? { fromICloud: { unsure: false } } : {}));
     delete photos[id];
     if (viewing === id) { if (next) { viewing = next.id; drawViewer(); } else jpClose(); }
     drawAll();
     if (window.YDJobView) YDJobView.draw();
     const name = String(target.customerName || 'that job').trim() || 'that job';
-    if (typeof showUndo === 'function') showUndo('Photo moved to ' + name, () => patch(id, { jobId: from, num: oldNum, placeOk: wasOk, movedFrom: wasFrom }), 9000);
+    if (typeof showUndo === 'function') showUndo('Photo moved to ' + name, () => patch(id, Object.assign({ jobId: from, num: oldNum, placeOk: wasOk, movedFrom: wasFrom },
+      icUnsure ? { fromICloud: { unsure: true } } : {})), 9000);
     else showToast('Photo moved to ' + name);
   };
 
@@ -485,7 +510,8 @@
       ? (busy[p.id] ? '<span class="jp-sending" data-jp-progress="' + safe(p.id) + '">Sending ' + Math.round((st.progress || 0) * 100) + '%</span>'
         : '<span class="jp-sending jp-wait">' + esc(st.error || 'Waiting for signal') + '</span>')
       : p.deleteAsked ? '<span class="jp-asked">🗑 Delete?</span>'
-      : offJob(p, placeOf(p, ctx)) ? '<span class="jp-asked jp-off">📍 Wrong job?</span>' : '';
+      : offJob(p, placeOf(p, ctx)) ? '<span class="jp-asked jp-off">📍 Wrong job?</span>'
+      : unsureJob(p) ? '<span class="jp-asked jp-off">📲 Check the job</span>' : '';
     // ro-ok: looking at a photo still works on a look-only Job screen (the
     // viewer offers changes only to whoever may make them).
     return '<button type="button" class="jp-thumb ro-ok" onclick="jpOpen(\'' + safe(p.id) + '\')" aria-label="Photo ' + p.num + '">' +
@@ -504,7 +530,7 @@
     const list = ordered();
     const ctx = placeCtx(id);
     const asked = list.filter(p => p.deleteAsked && !p.pending).length;
-    const off = ctx ? list.filter(p => offJob(p, placeOf(p, ctx))).length : 0;
+    const off = list.filter(p => !p.pending && flagged(p, ctx ? placeOf(p, ctx) : null)).length;
     const groups = STAGES.map(([k, name]) => {
       const mine = list.filter(p => p.stage === k);
       return mine.length ? '<div class="jp-stage"><div class="jp-stage-h"><span class="jp-chip jp-' + k + '">' + name + '</span> ' +
