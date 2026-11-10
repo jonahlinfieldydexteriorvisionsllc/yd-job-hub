@@ -6,13 +6,15 @@ them for us to continually increase the website. I want weekly reports on
 keywords and stuff so we can constantly be improving SEO."
 
 Every Monday after 7 am (the five-minute reminders run), plain code, no
-Claude call:
+Claude call, for the Sunday-to-Saturday week just gone (run waits for Google
+to finish counting it, as late as Wednesday):
 
   1. Search Console (read only, the same delegation as the daily site check):
      the searches the site showed for, clicks, views, place on Google, this
      week against last week, by search, by page, by kind of work and by town.
-     A week is the latest seven days Google has finished counting (it runs
-     two or three days behind), so the numbers never change after the report.
+     A week is always Sunday to Saturday, the newest one Google has finished
+     counting (it runs two or three days behind), so no day is in two reports
+     or none, and the numbers never change after the report.
   2. Google Analytics, when its two switches are on (Analytics Data API in
      the Google Cloud project, the analytics.readonly scope on the
      delegation): visitors, where they came from, the pages they landed on,
@@ -57,10 +59,10 @@ GA_URL = "https://analyticsdata.googleapis.com/v1beta/properties/%s:runReport"
 GA_EVENTS = {"generate_lead": "forms sent", "click_to_call": "phone taps", "click_email": "email taps"}
 STATE = ("settings", "seoWeekly")
 REPORTS = "seoReports"
-WEEKDAY = 0                          # Monday
+LAST_WEEKDAY = 2                     # Monday to Wednesday: the days a finished week is waited for
 FROM_HOUR = 7
+UNTIL_HOUR = 21                      # no report pushed late in the evening
 TIMEOUT = 30
-TRIES = 6                            # a Monday that keeps failing stops asking after this many tries
 TRY_AGAIN_MIN = 60
 WEEKS_KEPT = 104
 QUERIES_SHOWN = 25
@@ -68,7 +70,8 @@ PAGES_SHOWN = 15
 IDEAS_MAX = 5
 ALMOST_MIN = 10                      # views in 4 weeks before a search is worth a change
 UNCLICKED_MIN = 30
-SLIP_MIN = 10                        # views each week before a slip counts
+SLIP_MIN = 20                        # views each week before a slip counts
+UNCLICKED_WANT = 3                   # clicks a page should have had before missing them means anything
 SLIP_BY = 3                          # places
 SENT_DAYS = 56
 # Share of views that click, about, at each place on page 1: under half of it
@@ -162,11 +165,19 @@ def _totals(rows):
     return t
 
 
-def weeks(latest):
-    """This week = the seven days ending on the latest finished day; last week
-    the seven before; `earlier` the 28 days before this week (what makes a
-    search new); `month` the 28 days ending with this week (ideas)."""
-    end = _date(latest)
+def week_end(latest):
+    """The Saturday ending the newest Sunday-to-Saturday week Google has
+    finished counting. Weeks are always Sunday to Saturday, so no day is ever
+    in two reports or in none, however far behind Google runs."""
+    d = _date(latest)
+    return _day(d - datetime.timedelta(days=(d.weekday() - 5) % 7))
+
+
+def weeks(end):
+    """This week = Sunday to the Saturday `end`; last week the seven before;
+    `earlier` the 28 days before this week (what makes a search new); `month`
+    the 28 days ending with this week (ideas)."""
+    end = _date(end)
     return {"start": _day(end - datetime.timedelta(days=6)), "end": _day(end),
             "lastStart": _day(end - datetime.timedelta(days=13)), "lastEnd": _day(end - datetime.timedelta(days=7)),
             "earlierStart": _day(end - datetime.timedelta(days=34)),
@@ -264,7 +275,7 @@ def ideas(month_rows, this, last, sent, today, most=IDEAS_MAX):
         views = sum(r["impressions"] for r in rows)
         clicks = sum(r["clicks"] for r in rows)
         want = sum(_expected(r["position"]) * r["impressions"] for r in rows)
-        if views >= UNCLICKED_MIN and clicks < want / 2.0:
+        if views >= UNCLICKED_MIN and want >= UNCLICKED_WANT and clicks < want / 2.0:
             top = [r["q"] for r in sorted(rows, key=lambda r: -r["impressions"])[:3]]
             found.append({
                 "id": _idea_id("unclicked", page), "kind": "unclicked",
@@ -283,7 +294,7 @@ def ideas(month_rows, this, last, sent, today, most=IDEAS_MAX):
         if r["position"] - was["position"] >= SLIP_BY:
             page = (best.get(q) or {}).get("page") or ""
             found.append({
-                "id": _idea_id("slipping", q, today), "kind": "slipping",
+                "id": _idea_id("slipping", q), "kind": "slipping",
                 "title": "“%s” slipped from #%d to #%d" % (q, round(was["position"]), round(r["position"])),
                 "why": "Searched %d times this week%s. Check what changed on the page, whether another business's "
                        "page passed it, and give the page something better to say about it." % (
@@ -310,19 +321,27 @@ def ideas(month_rows, this, last, sent, today, most=IDEAS_MAX):
     return keep
 
 
+CHECK_SECONDS = 40      # every idea's page checked within this; the rest keep the address Google gave
+
+
 def live_page(path):
-    """The page an address lands on today. Google's four weeks still hold the
-    Squarespace addresses (an old Yard Talk post's /yard-talk/xk406...), which
-    redirect to their new pages: an idea must name the page to change. None
-    when the address no longer leads to a page."""
+    """The page an address lands on today. Google's four weeks can hold
+    Squarespace addresses that now redirect to their new pages: an idea must
+    name the page to change. None only when the site says the page is gone
+    (404 or 410); anything else unclear keeps the address as it is."""
+    head = {"User-Agent": "Mozilla/5.0 (compatible; YD-Job-Hub-site-check)"}
     try:
-        r = requests.head(SITE + path, allow_redirects=True, timeout=15,
-                          headers={"User-Agent": "Mozilla/5.0 (compatible; YD-Job-Hub-site-check)"})
+        r = requests.head(SITE + path, allow_redirects=True, timeout=8, headers=head)
+        if r.status_code in (403, 405):     # a server that won't answer HEAD: ask for the page itself
+            r = requests.get(SITE + path, allow_redirects=True, timeout=8, headers=head, stream=True)
+            r.close()
     except requests.RequestException as e:
         print("seoweekly: page not checked:", path, e)
         return path
-    if r.status_code >= 400:
+    if r.status_code in (404, 410):
         return None
+    if r.status_code >= 300:
+        return path
     return _path(r.url) if str(r.url).startswith(SITE) else path
 
 
@@ -330,8 +349,10 @@ def pages_today(found):
     """Each idea's page as it is today; an idea whose page is gone is dropped,
     and two that now land on one page keep the first (one idea a page)."""
     keep = []
+    import time
+    stop = time.monotonic() + CHECK_SECONDS
     for i in found:
-        if not i.get("page"):
+        if not i.get("page") or time.monotonic() > stop:
             keep.append(i)
             continue
         now = live_page(i["page"])
@@ -401,6 +422,18 @@ def _num(v):
     return int(f) if f == int(f) else round(f, 2)
 
 
+def _landing_pages(rows):
+    """Landing pages with any ?gclid=... or ?utm_... taken off and the same
+    page's visits added together, most first."""
+    pages = {}
+    for r in rows:
+        page = ((r["d"][0] if r["d"] else "") or "/").split("?")[0].split("#")[0] or "/"
+        if page == "(not set)":
+            continue
+        pages[page] = pages.get(page, 0) + (r["m"][0] if r["m"] else 0)
+    return [{"page": p, "visits": n} for p, n in sorted(pages.items(), key=lambda x: -x[1])]
+
+
 def read_analytics(token, prop, w):
     rng = [{"startDate": w["start"], "endDate": w["end"]}]
     both = rng + [{"startDate": w["lastStart"], "endDate": w["lastEnd"], "name": "last"}]
@@ -417,7 +450,7 @@ def read_analytics(token, prop, w):
                                  "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}], "limit": 10})
     landing = _ga(token, prop, {"dateRanges": rng, "dimensions": [{"name": "landingPage"}],
                                 "metrics": [{"name": "sessions"}],
-                                "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}], "limit": 10})
+                                "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}], "limit": 25})
     events = _ga(token, prop, {"dateRanges": rng, "dimensions": [{"name": "eventName"}, {"name": "pagePath"}],
                                "metrics": [{"name": "eventCount"}],
                                "dimensionFilter": {"filter": {"fieldName": "eventName", "inListFilter": {
@@ -433,8 +466,7 @@ def read_analytics(token, prop, w):
         "visitors": t["this"][0], "visits": t["this"][1], "views": t["this"][2],
         "lastVisitors": t["last"][0], "lastVisits": t["last"][1], "lastViews": t["last"][2],
         "channels": [{"name": r["d"][0] if r["d"] else "", "visits": r["m"][0] if r["m"] else 0} for r in channels],
-        "landing": [{"page": (r["d"][0] if r["d"] else "") or "/", "visits": r["m"][0] if r["m"] else 0}
-                    for r in landing if (r["d"] or [""])[0] != "(not set)"],
+        "landing": _landing_pages(landing),
         "actions": [{"event": k, "words": GA_EVENTS[k], "count": v["count"],
                      "pages": sorted(({"page": p, "count": n} for p, n in v["pages"].items()),
                                      key=lambda x: -x["count"])[:5]} for k, v in acts.items()],
@@ -476,17 +508,25 @@ def read_leads(db, w):
 
 # ---------------------------------------------------------------- the whole report
 
-def build(db, now=None):
-    """This week's report, worked out and saved. Raises when Search Console
-    can't be read at all (nothing to report on); Analytics or the lead count
+def newest_week(now=None):
+    """The Saturday of the newest week Google has finished: (end, token)."""
+    now = now or dg._now()
+    token = dg._gmail_access_token(SC_SCOPE)
+    return week_end(latest_day(token, now.date())), token
+
+
+def build(db, now=None, end=None, token=None):
+    """The report for the week ending Saturday `end` (the newest finished one
+    when not given), worked out and saved. Raises when Search Console can't
+    be read at all (nothing to report on); Analytics or the lead count
     failing leaves that part saying why."""
     now = now or dg._now()
     today = now.date()
     ref = db.collection(STATE[0]).document(STATE[1])
     state = ref.get().to_dict() or {}
-    token = dg._gmail_access_token(SC_SCOPE)
-    latest = latest_day(token, today)
-    w = weeks(latest)
+    if not end or not token:
+        end, token = newest_week(now)
+    w = weeks(end)
     rep = {"at": now.isoformat(), "week": {"start": w["start"], "end": w["end"]},
            "last": {"start": w["lastStart"], "end": w["lastEnd"]}, "words": week_words(w["start"], w["end"])}
     rep.update(search_part(read_search(token, w), today, state.get("sent") or {}))
@@ -683,47 +723,71 @@ def tell(people, rep):
 
 
 def run(db, people, now=None):
-    """Mondays after 7 am. A Monday that fails (Google down) tries again an
-    hour later, up to TRIES times; a week already sent is never sent twice."""
+    """Monday to Wednesday, 7 am to 9 pm, asked at most once an hour: once Google
+    has finished counting a week not yet sent (usually Monday morning; it can
+    run three or four days behind), that week's report is worked out, emailed
+    and pushed. A week is marked sent before the email goes, so a run that
+    dies part way never emails it twice. Still failing on Wednesday evening:
+    one push says so."""
     now = now or dg._now()
-    if now.weekday() != WEEKDAY or now.hour < FROM_HOUR:
+    if now.weekday() > LAST_WEEKDAY or not FROM_HOUR <= now.hour < UNTIL_HOUR:
         return []
     from google.cloud import firestore as fs
-    claim = db.collection("reminderLog").document("seoweekly_" + now.strftime("%Y-%m-%d"))
+    claim = db.collection("reminderLog").document("seoweekly_check")
 
     @fs.transactional
     def take(tx):
         snap = claim.get(transaction=tx)
-        c = (snap.to_dict() or {}) if snap.exists else {}
-        if c.get("done") or int(c.get("tries") or 0) >= TRIES:
-            return False
-        last = c.get("tryAt")
+        last = ((snap.to_dict() or {}) if snap.exists else {}).get("at")
         if last:
             try:
                 if now - datetime.datetime.fromisoformat(last) < datetime.timedelta(minutes=TRY_AGAIN_MIN):
                     return False
             except ValueError:
                 pass
-        tx.set(claim, {"tryAt": now.isoformat(), "tries": int(c.get("tries") or 0) + 1}, merge=True)
+        tx.set(claim, {"at": now.isoformat()})
         return True
     if not take(db.transaction()):
         return []
+    ref = db.collection(STATE[0]).document(STATE[1])
+    state = ref.get().to_dict() or {}
     try:
-        rep = build(db, now)
+        end, token = newest_week(now)
+        if end <= str(state.get("sentWeek") or ""):
+            return []           # sent already, or Google hasn't finished the next week yet
+        rep = build(db, now, end, token)
     except Exception as e:      # noqa: BLE001 -- told on the screen; tried again in an hour
         print("seoweekly: report failed:", e)
-        claim.set({"error": str(e)[:300]}, merge=True)
-        db.collection(STATE[0]).document(STATE[1]).set({"error": str(e)[:300], "errorAt": now.isoformat()},
-                                                        merge=True)
+        ref.set({"error": str(e)[:300], "errorAt": now.isoformat()}, merge=True)
+        told = now.strftime("%G-W%V")
+        if now.weekday() == LAST_WEEKDAY and now.hour >= 17 and state.get("errorTold") != told:
+            ref.set({"errorTold": told}, merge=True)
+            return _tell_failed(people)
         return []
+    ref.set({"sentWeek": end, "sentAt": now.isoformat()}, merge=True)
     emailed = True
     try:
         send_email(rep)
     except Exception as e:      # noqa: BLE001 -- it's in Job Hub either way
         emailed = False
         print("seoweekly: email failed:", e)
-    claim.set({"done": True, "week": rep["week"]["end"], "emailed": emailed}, merge=True)
-    return tell(people, rep) or [{"seoWeekly": rep["week"]["end"]}]
+    ref.set({"emailed": emailed}, merge=True)
+    return tell(people, rep) or [{"seoWeekly": end}]
+
+
+def _tell_failed(people):
+    sent = []
+    for uid, u in people.items():
+        if u.get("role") == "owner":
+            try:
+                sent.append({"uid": uid, "seoWeekly": "failed", "phones": dg.send_push(
+                    uid, {"push": {"title": "📈 Website report didn't come this week",
+                                   "body": "Google's numbers couldn't be read since Monday. Media → Website says why; "
+                                           "Work it out again now tries once more."}},
+                    tag="yd-seo-weekly", ttl=24 * 3600, opens="website")})
+            except Exception as e:  # noqa: BLE001
+                print("seoweekly: push failed:", uid, e)
+    return sent
 
 
 # ---------------------------------------------------------------- Have Claude do it

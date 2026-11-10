@@ -60,6 +60,7 @@
 
   // The view button's small line.
   function words() {
+    load();      // the button reads the report on a phone before the view is ever opened
     const r = report();
     if (!r) return state && state.error ? 'Couldn’t be worked out' : 'Comes Mondays';
     const t = r.total || {};
@@ -162,10 +163,9 @@
         tile('Clicks from Google', t.clicks || 0, l.clicks) +
         tile('Times shown', t.impressions || 0, l.impressions) +
         tile('Average place', t.position, l.position, true, e(place(t.position))) +
-        tile('Website leads', (r.leads || {}).website || 0, null) +
+        tile('New website leads', (r.leads || {}).website || 0, null) +
       '</div>' +
-      '<p class="sr-note">' + (ours.clicks ? plural(ours.clicks, 'click') + ' came from people searching our name; ' +
-        plural(Math.max(0, (t.clicks || 0) - ours.clicks), 'click') + ' from searches for the work. ' : '') +
+      '<p class="sr-note">' + (ours.clicks ? plural(ours.clicks, 'click') + ' of them came from people searching our name. ' : '') +
         (ix.pages ? ix.on + ' of ' + ix.pages + ' pages are on Google.' : '') + '</p>' +
       '<h4 class="sr-h">What to change next</h4>' +
       (ideas.length ? ideas.map(i => ideaHtml(i, week)).join('') +
