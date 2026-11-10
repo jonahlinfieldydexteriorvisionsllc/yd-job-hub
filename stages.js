@@ -82,14 +82,12 @@
   // kept, but counted in none of the business's totals and never sent on to
   // QuickBooks (`offBooks` below; stages.py receipt_off_books).
   const RECEIPT_OFF_BOOKS = ['personal'];
-  // Places QuickBooks must never get as an expense (`noQb` below;
-  // stages.py receipt_not_to_qb): everything off the books, and a loan
-  // payment (Jonah, 22 Oct 2026: "add loan payments as a tag for
-  // receipts"). A loan payment is the business's money and is counted --
-  // under its own name -- but most of it is paying back what was borrowed,
-  // which is not a cost; QuickBooks has it from the bank, where the
-  // principal and the interest are split.
-  const RECEIPT_NOT_TO_QB = ['personal', 'loan'];
+  // Places QuickBooks must never get (`noQb` below; stages.py
+  // receipt_not_to_qb): everything off the books. A loan payment (Jonah,
+  // 22 Oct 2026: "add loan payments as a tag for receipts") was held back
+  // too, on Claude's own reasoning; Jonah, 10 Nov 2026: "loan payments
+  // should still go to quickbooks", so it goes like any receipt.
+  const RECEIPT_NOT_TO_QB = ['personal'];
   // The old set-aside pick list's words, read back as the reason.
   const RECEIPT_WHY = { overhead: 'Shop overhead', personal: 'Personal', notPurchase: 'Not a purchase',
     alreadyEntered: 'Already entered', subcontractor: 'Subcontractor bill' };

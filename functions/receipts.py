@@ -338,7 +338,8 @@ KINDS = ["materials", "plants", "dump_and_disposal", "equipment_and_repairs", "f
          "rental", "subcontractor", "vehicle", "office_and_software", "insurance",
          "utilities_and_phone", "loan_payment", "travel", "company", "marketing", "snow", "other"]
 # A payment on a loan (Jonah, 22 Oct 2026): offered for 🏦 Loan payment on the
-# Receipts tab, and never sent to QuickBooks as an expense (_not_for_qb).
+# Receipts tab, and sent on to QuickBooks like any receipt (Jonah, 10 Nov
+# 2026: "loan payments should still go to quickbooks").
 LOAN_KIND = "loan_payment"
 # Jonah, 29 Oct 2026: "make accountant, bookkeeper and tax-prep bills start on
 # LLC overhead by themselves". What the company itself costs is one kind,
@@ -2455,9 +2456,9 @@ def forward_to_qb(db, rid, raw=None, mime=None):
 # and its payment (_save joins them), so QuickBooks must never get it twice.
 # The receipt's qbForward (with the message id) says it went, and so does
 # receiptMail/{messageId}, so no later read sends it again. Personal
-# purchases and loan payments (filed only there, or read as a loan payment
-# and not yet sorted: _not_for_qb) are never sent unless asked for one by
-# one, paychecks and non-purchases are not receipts, and mail from before
+# purchases (filed only there: _not_for_qb) are never sent unless asked for
+# one by one -- loan payments go like any receipt (Jonah, 10 Nov 2026) --
+# paychecks and non-purchases are not receipts, and mail from before
 # settings/receipts.since is never sent. Nor do personal ones get the
 # "receipts" label (receiptMail outcome "personal"); a Menards rebate one
 # still gets the rebate label.
@@ -2587,18 +2588,14 @@ def _pick_mail(r, floor_ms):
 
 
 def _not_for_qb(r):
-    """True for a receipt QuickBooks must not get as an expense: filed only
-    under Personal or as a loan payment (stages.receipt_not_to_qb) -- or
-    read as a loan payment and not sorted yet. The week's read forwards what
-    it saves before anyone has sorted it, so a loan payment is held back by
-    what it was read as; filed somewhere else by hand, it goes when asked
-    (Send to QuickBooks, or the last 14 days). Keep the same as receipts.js
-    notForQb. A bill still to pay, or one marked not a receipt, is no
-    receipt at all (stages.receipt_counts): never sent."""
+    """True for a receipt QuickBooks must not get: filed only under Personal
+    (stages.receipt_not_to_qb). A loan payment goes like any receipt (Jonah,
+    10 Nov 2026: "loan payments should still go to quickbooks"); until then
+    one read as a loan payment was held back here while still to sort. Keep
+    the same as receipts.js notForQb. A bill still to pay, or one marked not
+    a receipt, is no receipt at all (stages.receipt_counts): never sent."""
     r = r or {}
-    if stages.receipt_not_to_qb(r) or not stages.receipt_counts(r):
-        return True
-    return r.get("kind") == LOAN_KIND and stages.receipt_status(r) == "tosort" and not (r.get("splits") or [])
+    return stages.receipt_not_to_qb(r) or not stages.receipt_counts(r)
 
 
 def forward_email(db, rid, to, since_ms, again=False):
@@ -2614,9 +2611,8 @@ def forward_email(db, rid, to, since_ms, again=False):
     # A bill not paid yet, or not a receipt at all: not even when asked for.
     if not stages.receipt_counts(r):
         return None
-    # Set aside (already entered, or not the business's after all), filed
-    # only under Personal or as a loan payment, or read as a loan payment and
-    # not sorted yet, goes only when asked for that one receipt. Its one
+    # Set aside (already entered, or not the business's after all), or filed
+    # only under Personal, goes only when asked for that one receipt. Its one
     # status (stages.py): an old one "set aside as overhead" is the shop's,
     # filed, and goes.
     if not again and ((have.get("tries") or 0) >= FORWARD_TRIES or stages.receipt_status(r) == "aside"
@@ -2685,8 +2681,7 @@ def forward_emails(db, rids=(), days=None, st=None):
         cutoff = (dg._now() - datetime.timedelta(days=days + 1)).isoformat()
         for s in db.collection("receipts").where("createdAt", ">=", cutoff).stream():
             d = s.to_dict() or {}
-            # Set aside (already entered), filed only under Personal or as a
-            # loan payment, or a loan payment still to sort: not sent.
+            # Set aside (already entered) or filed only under Personal: not sent.
             if stages.receipt_status(d) != "aside" and not _not_for_qb(d) and s.id not in want:
                 want.append(s.id)
     for s in db.collection("receipts").where("qbForward.ok", "==", False).stream():
@@ -2848,8 +2843,8 @@ def from_photo(client, body, uid, who):
     if got.get("doc_type") == "person_payment":
         return {"error": "That's a payment to a person, not a receipt — not added"}, usage
     personal = got.get("whose") == "personal"
-    # A loan payment likewise waits for a person and never goes to
-    # QuickBooks as an expense (_not_for_qb).
+    # A loan payment likewise waits for a person to say which loan, but goes
+    # on to QuickBooks like any receipt (Jonah, 10 Nov 2026).
     loan = got.get("kind") == LOAN_KIND
     db = dg._db()
     jobs = _jobs(db)
@@ -2876,7 +2871,7 @@ def from_photo(client, body, uid, who):
         except Exception as err:                        # noqa: BLE001
             print("receipts: photo %s not kept: %s" % (rid, err))
         db.collection("receipts").document(rid).set(extra, merge=True)
-        if not personal and not loan:
+        if not personal:
             forward_to_qb(db, rid, raw, mime)
     else:
         # The same purchase was already here (its email came first). What
@@ -2920,7 +2915,7 @@ def from_photo(client, body, uid, who):
 HOW_WORDS = {"clock": "was clocked in on it", "page": "sent it from the job's page", "picked": "said it's for this job"}
 # Why a photo Claude read as a household's waits for a person (from_photo).
 PERSONAL_WHY = "it looks like a personal purchase — say where it goes (not sent to QuickBooks)"
-LOAN_WHY = "it looks like a loan payment — say where it goes (not sent to QuickBooks)"
+LOAN_WHY = "it looks like a loan payment — say which loan (sent to QuickBooks)"
 PLACES_NOT_JOB = ("vehicle", "shop", "office")
 # A receipt's lines are allowed to miss its total by this much (rounding on
 # the paper) and still count as adding up.

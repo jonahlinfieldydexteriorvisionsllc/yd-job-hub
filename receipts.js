@@ -103,10 +103,10 @@
   // Jonah, 22 Oct 2026: "add loan payments as a tag for receipts". A loan
   // payment (a truck or a machine) is the business's money, counted under
   // its own name ("Loan payments" in a month's totals), filed by the
-  // lender's name -- but never sent to QuickBooks as an expense, since most
-  // of it pays back what was borrowed, which is not a cost (stages.js
-  // RECEIPT_NOT_TO_QB). One the email reader reads as a loan payment comes
-  // with this place already picked.
+  // lender's name, and sent on to QuickBooks like any receipt (Jonah,
+  // 10 Nov 2026: "loan payments should still go to quickbooks"; it was held
+  // back before, on Claude's own reasoning). One the email reader reads as
+  // a loan payment comes with this place already picked.
   //
   // Jonah, 27 Oct 2026: "add receipt tag for travel" -- a hotel, a flight,
   // parking or meals on a business trip. A business cost like the others,
@@ -1982,8 +1982,8 @@
     }
     if (to === 'loan') {
       return '<div class="rc-assign">' + btn('Add ' + n + 'to loan payments') + '</div>' +
-        '<div class="rc-hint">Counted under All receipts → 🏦 Loans, by the lender’s name. Never sent to QuickBooks as an ' +
-        'expense: most of a loan payment pays back what was borrowed, which isn’t a cost.</div>';
+        '<div class="rc-hint">Counted under All receipts → 🏦 Loans, by the lender’s name, and sent to QuickBooks like ' +
+        'any receipt. A loan for your home goes under 👤 Personal instead.</div>';
     }
     if (to === 'sub') {
       // The owner picks which of his subcontractors (the one whose name the
@@ -2022,19 +2022,18 @@
   // to QuickBooks when it did not go. compact: the one-line row.
   // A receipt from email says so only once it has been sent, or tried
   // (settings/receipts.forwardEmails; receipts.py forward_email).
-  // Kept from QuickBooks: filed only where it must not go as an expense
-  // (Personal, a loan payment: stages.js noQb), or read as a loan payment
-  // and not sorted yet -- the server holds those back too (receipts.py
-  // _not_for_qb; keep the two the same).
+  // Kept from QuickBooks: filed only where it must not go (Personal:
+  // stages.js noQb) -- the server holds those back too (receipts.py
+  // _not_for_qb; keep the two the same). A loan payment goes like any
+  // receipt (Jonah, 10 Nov 2026).
   function notForQb(r) {
     const st = stageOf(r);
     // A bill still to pay, or not a receipt at all: never.
-    if (st.noQb || st.offBooks || st.id === 'topay' || st.id === 'notreceipt') return true;
-    return r.kind === 'loan_payment' && st.id === 'tosort' && !(r.splits || []).length;
+    return !!(st.noQb || st.offBooks || st.id === 'topay' || st.id === 'notreceipt');
   }
   function qbHtml(r, rid, compact) {
     const f = r.qbForward || null;
-    // Filed as Personal or a loan payment and never sent: it is not meant
+    // Filed as Personal and never sent: it is not meant
     // to go, so it is not "not in QuickBooks yet" either -- only its photo
     // is offered.
     if (!(f && f.ok) && notForQb(r)) {
@@ -2100,7 +2099,7 @@
   // Email receipts the server would send with "Send the ones from the last
   // 14 days now" -- the same test as receipts.py forward_emails(days=14):
   // from email (not a photo), not sent yet, not set aside, not filed only
-  // as Personal or a loan payment (notForQb), with an email from after
+  // as Personal (notForQb), with an email from after
   // reading started and inside the 14 days.
   const FWD_DAYS = 14;
   let fwdBusy = false;
