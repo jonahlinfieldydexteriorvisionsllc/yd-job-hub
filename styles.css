@@ -3216,19 +3216,31 @@
     border-left:5px solid var(--c); background:var(--surface); color:var(--text); font:inherit; font-size:13px; font-weight:600;
     text-align:left; cursor:pointer; overflow-wrap:anywhere; }
   .hm-note-b:hover { border-color:var(--c); }
-  /* The owner's day (home.js placesHtml): his to-dos in the office and out
-     side by side once the card is wide enough; one under the other on a
-     phone, the office's first. The card's own width decides (a container
-     query), not the window's. Set times have a card of their own (scheduleHtml). */
+  /* The owner's day at the top of Home (home.js ownerDayHtml), Jonah 10 Nov
+     2026: three columns -- his set times, what to do while out, what to do
+     in the office. The card's own width decides (a container query), not the
+     window's: all three side by side once there is room, the set times above
+     the other two below that, one under the other on a phone, in that order.
+     What could be done in either place sits under the out and office lists,
+     inside their own half, so a long set-times column never leaves a gap
+     above it. */
   .hm-places { container-type:inline-size; }
-  .hm-day-grid { display:grid; grid-template-columns:minmax(0, 1fr); column-gap:20px;
-    grid-template-areas:"office" "out" "either"; align-items:start; }
-  .hm-day-office { grid-area:office; }
-  .hm-day-out { grid-area:out; }
-  .hm-day-either { grid-area:either; }
+  .hm-day-grid, .hm-day-pair { display:grid; grid-template-columns:minmax(0, 1fr); column-gap:20px; row-gap:8px; align-items:start; }
+  .hm-day-todo { min-width:0; }
+  .hm-day-either { margin-top:8px; }
   .hm-day-either .hm-sub { font-size:10.5px; }
-  @container (min-width:540px) {
-    .hm-day-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); grid-template-areas:"office out" "either either"; }
+  @container (min-width:500px) {
+    .hm-day-pair { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  }
+  @container (min-width:600px) {
+    .hm-day-grid { grid-template-columns:minmax(0, 1fr) minmax(0, 2fr); }
+  }
+  /* A narrow set-times column (a tablet): the time over the words, so the
+     words keep the column's width rather than a third of it. */
+  .hm-day-sched { container-type:inline-size; }
+  @container (max-width:260px) {
+    .hm-day-sched .md-open { flex-direction:column; gap:2px; }
+    .hm-day-sched .md-time { width:auto; }
   }
   .hm-row.hm-over { opacity:.55; }
 
@@ -4023,25 +4035,6 @@
     .hm-grid { display:block; columns:360px 3; column-gap:18px; }
     .hm-grid > .section { display:block; width:100%; margin:0 0 18px; break-inside:avoid; -webkit-column-break-inside:avoid; page-break-inside:avoid; }
   }
-  /* The owner's: Waiting on you, and his day beside it two thirds wide on a
-     wide screen -- room for his office and out lists side by side (home.js
-     html, placesHtml); one under the other on anything narrower. */
-  .hm-lead { display:grid; grid-template-columns:minmax(0, 1fr); gap:18px; margin:0 0 18px; align-items:start; }
-  .hm-lead-side { display:grid; grid-template-columns:minmax(0, 1fr); gap:18px; align-items:start; }
-  .hm-lead .section { margin-bottom:0; }
-  @media (min-width:1000px) {
-    .hm-lead { grid-template-columns:minmax(0, 1fr) minmax(0, 2fr); }
-  }
-  /* One column: his day comes before the notes to sort. */
-  @media (max-width:999px) {
-    .hm-lead-side { display:contents; }
-    .hm-lead #hm-notes { order:1; }
-  }
-  @media (max-width:720px) {
-    .hm-lead, .hm-lead-side { gap:16px; }
-    .hm-lead { margin-bottom:16px; }
-  }
-
   /* The calendar: the crew's three views, big enough for a thumb */
   .cal-seg-crew .cal-vbtn { min-height:44px; font-size:13px; padding:10px 14px; }
 

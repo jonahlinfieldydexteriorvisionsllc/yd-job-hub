@@ -585,9 +585,6 @@
     // Reminders reach only a phone that has said yes to them (calendar.js,
     // the same note My day shows).
     const nudge = window.YDCalendar && YDCalendar.nudge ? YDCalendar.nudge() : '';
-    if (isOwner() && window.YDRemind && YDRemind.place) {
-      return card('day', title, countWords(c), link, nudge + placesHtml(ownLate, ownAny, crewLate, crewAny), left > 0);
-    }
     const body = nudge +
       sub('🕑 Schedule') +
       (d.mineTimed.length ? capped('mineT', d.mineTimed.map(timedRow), 8)
@@ -604,20 +601,70 @@
     return card('day', title, countWords(c), link, body, left > 0);
   }
 
-  // What is at a set time today, in a card of its own at the top of Home.
-  // Jonah (5 Nov 2026): "Separate my any time tasks from my ones scheduled
-  // for a time I missed my tsa appointment today because it was at the bottom
-  // of". It was the first thing in My day, but on a phone My day comes after
-  // the figures, Waiting on you, the notes and the clock, screens down. A time
-  // can be missed; a to-do can wait, so the two are not one list. Real times
-  // first, then a day on a job (forHome's "All day"). No card on a day with
-  // nothing at a set time. The owner's: the crew's day is under their clock.
-  function scheduleHtml(d) {
-    if (!signedIn() || !d || d === 'loading') return '';
-    const left = d.mineTimed.filter(x => !x.done);
-    if (!left.length) return '';
-    const rows = left.filter(x => x.o && x.o.time).concat(left.filter(x => !(x.o && x.o.time)));
-    return card('sched', '🕑 At set times today', '', ['Calendar', "switchTab('calendar')"], capped('mineT', rows.map(timedRow), 8));
+  // The owner's day, the whole of it, at the top of Home: three columns --
+  // what is at a set time, what to do while out, what to do in the office.
+  //
+  // How it came to be: the set times had a card of their own up here (Jonah,
+  // 5 Nov 2026: "Separate my any time tasks from my ones scheduled for a time
+  // I missed my tsa appointment today because it was at the bottom of"), and
+  // his to-dos stayed in My day further down, split by where they get done
+  // (22 Oct: "side by side for the to do list of stuff to do in the office and
+  // stuff to do while im out"). Then (10 Nov): "i want the at set times today
+  // thing on my home page split so the other half shows what i need to do
+  // today thats not at set times. Also i want it split by in or out items. So
+  // 3 columns. 1 thats my schedule stuff. 1 thats my out of home stuff. and 1
+  // thats my in office items." So they are one card, in his order, and the My
+  // day card below is gone: a to-do is listed once.
+  //
+  // Set times: real times first, then a day on a job (forHome's "All day").
+  // Out and office: a thing's place (remind.js placeOf: picked on it, else its
+  // tag's usual place), the late ones first in each, as the one list had them
+  // -- it was wanted sooner than today's, and "Show all" must not fold it away.
+  // What could be done in either place (no place picked, a tag with no usual
+  // one) is not guessed into a column: a small list under the out and office
+  // ones says so. The crew tasks anyone may pick up, under all of it. The one
+  // count in the head is the calendar's (calendar.js tally), as My day's was.
+  // The card is there every day, a day with nothing at a set time included.
+  // Only his: everyone else's day is Your day (myDayHtml), unchanged.
+  const PLACE_HEADS = { out: '🚗 To do while I’m out', office: '💻 To do in the office', either: 'Either place' };
+  function ownerDayHtml(d) {
+    if (!signedIn()) return '';
+    const title = '📅 My day', link = ['Calendar', "switchTab('calendar')"];
+    if (d === 'loading' || !d) return card('day', title, '', link, empty('Loading…'));
+    // Ticked off, a thing leaves Home (4 Nov 2026): the calendar keeps it.
+    const timedLeft = d.mineTimed.filter(x => !x.done);
+    const timed = timedLeft.filter(x => x.o && x.o.time).concat(timedLeft.filter(x => !(x.o && x.o.time)));
+    const lateOnes = d.mineLate.filter(x => !x.done), anyOnes = d.mineAny.filter(x => !x.done);
+    const rows = lateOnes.filter(x => !openCrew(x)).map(x => [x, true])
+      .concat(anyOnes.filter(x => !openCrew(x)).map(x => [x, false]));
+    const crew = lateOnes.filter(openCrew).map(x => todoRow(x, true))
+      .concat(anyOnes.filter(openCrew).map(x => todoRow(x, false)));
+    const placeOf = x => (x.place === 'out' || x.place === 'office' ? x.place : 'either');
+    const of = id => rows.filter(r => placeOf(r[0]) === id).map(r => todoRow(r[0], r[1]));
+    const out = of('out'), office = of('office'), either = of('either');
+    const head = id => {
+      const p = window.YDRemind && YDRemind.place ? YDRemind.place(id) : null;
+      return p ? (p.icon ? p.icon + ' ' : '') + p.list : PLACE_HEADS[id];
+    };
+    const c = d.count || null;
+    const left = c ? c.today + c.earlier : 0;
+    // Reminders reach only a phone that has said yes to them (calendar.js).
+    const nudge = window.YDCalendar && YDCalendar.nudge ? YDCalendar.nudge() : '';
+    const body = nudge +
+      '<div class="hm-places"><div class="hm-day-grid">' +
+        '<div class="hm-day-sched">' + sub('🕑 At set times') +
+          (timed.length ? capped('mineT', timed.map(timedRow), 8) : empty('Nothing at a set time today.')) + '</div>' +
+        '<div class="hm-day-todo"><div class="hm-day-pair">' +
+          '<div class="hm-day-out">' + sub(head('out')) +
+            (out.length ? capped('mineOut', out) : empty('Nothing to get done out today.')) + '</div>' +
+          '<div class="hm-day-office">' + sub(head('office')) +
+            (office.length ? capped('mineO', office) : empty('Nothing for the office today.')) + '</div>' +
+        '</div>' +
+        (either.length ? '<div class="hm-day-either">' + sub(head('either')) + capped('mineE', either) + '</div>' : '') +
+        '</div>' +
+      '</div></div>' +
+      (crew.length ? sub('👷 Crew tasks — anyone can do these') + capped('mineC', crew) : '');
+    return card('day', title, countWords(c), link, body, left > 0);
   }
 
   // Notes to sort later (Jonah, 22 Oct 2026: "notes list on dashboard that
@@ -833,36 +880,6 @@
     render();
   };
   window.homeNoteDrop = async function (id) { await YDBoards.inboxDrop(id); render(); };
-
-  // The owner's day with his to-dos split by where they get done. Jonah (22
-  // Oct 2026): "my dashboard should have side by side for the to do list of
-  // stuff to do in the office and stuff to do while im out". Two lists --
-  // to do in the office, to do while out -- side by side where the card is
-  // wide enough (a laptop: it is two thirds of Home's width there, html;
-  // on a wider screen the schedule sits beside them too), one under the
-  // other on a phone, the office's first. What could be done in either place (no place picked, and a tag
-  // with no usual one) is a small list under them. Each list has its late
-  // ones first, as the one list had; a tick does what it did (todoRow), and
-  // the one count in the head is unchanged. Only his: the crew's day is the
-  // crew's tasks, done out (Your day, unchanged for everyone else).
-  // The set times are not here: they have the top of Home (scheduleHtml).
-  function placesHtml(ownLate, ownAny, crewLate, crewAny) {
-    const rows = ownLate.map(x => [x, true]).concat(ownAny.map(x => [x, false]));
-    const of = id => rows.filter(r => (r[0].place || '') === id).map(r => todoRow(r[0], r[1]));
-    const office = of('office'), out = of('out'), either = of('');
-    const head = id => { const p = YDRemind.place(id); return (p.icon ? p.icon + ' ' : '') + p.list; };
-    return '<div class="hm-places"><div class="hm-day-grid">' +
-      '<div class="hm-day-office">' + sub(head('office')) +
-        (office.length ? capped('mineO', office) : empty('Nothing for the office today.')) + '</div>' +
-      '<div class="hm-day-out">' + sub(head('out')) +
-        (out.length ? capped('mineOut', out) : empty('Nothing to get done out today.')) + '</div>' +
-      (either.length ? '<div class="hm-day-either">' + sub(head('either')) + capped('mineE', either) + '</div>' : '') +
-      '</div></div>' +
-      (crewLate.length || crewAny.length
-        ? sub('👷 Crew tasks — anyone can do these') +
-          capped('mineC', crewLate.map(x => todoRow(x, true)).concat(crewAny.map(x => todoRow(x, false))))
-        : '');
-  }
 
   function crewDayHtml(d) {
     if (!signedIn()) return '';
@@ -1366,19 +1383,15 @@
     // the work and the money. The crew: their clock, their day, the rest of
     // the crew, their jobs.
     const top = greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() + statsHtml(all);
-    // The owner's day is wide (placesHtml: his office and out lists side by
-    // side), so on a wide screen it takes two thirds of the width beside
-    // Waiting on you, and the rest flow in columns under them. A phone has
-    // them one under the other, his day straight after Waiting on you and the
-    // notes after that (styles.css .hm-lead): four notes are a whole screen,
-    // and they are for sorting later, when he's home. Nobody's day comes after
-    // them (review of 4 Nov 2026; Jonah: "Yes, move it").
+    // The owner's day is the whole width, near the top (ownerDayHtml: his set
+    // times, out and office lists in three columns, 10 Nov 2026). Under the
+    // figures, the rest flow in columns: Waiting on you first, then his clock
+    // and end of day, then the notes -- four notes are a whole screen on a
+    // phone, and they are for sorting later, when he's home (review of 4 Nov
+    // 2026) -- then the crew's day, the money and the machines.
     if (!crewish && isOwner()) {
-      const side = [waitingHtml(), notesHtml(), clockHtml(), eodHtml()].filter(Boolean).join('');
-      const day = myDayHtml(d);
-      return greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() + bidsNowHtml(all) + jobsHtml(all, true) + scheduleHtml(d) + statsHtml(all) +
-        '<div class="hm-lead"><div class="hm-lead-side">' + side + '</div>' + day + '</div>' +
-        '<div class="hm-grid">' + [crewDayHtml(d), invoiceHtml(all), bidsHtml(all, true), equipmentHtml()]
+      return greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() + bidsNowHtml(all) + jobsHtml(all, true) + ownerDayHtml(d) + statsHtml(all) +
+        '<div class="hm-grid">' + [waitingHtml(), clockHtml(), eodHtml(), notesHtml(), crewDayHtml(d), invoiceHtml(all), bidsHtml(all, true), equipmentHtml()]
           .filter(Boolean).join('') + '</div>';
     }
     const cards = crewish
