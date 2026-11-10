@@ -391,7 +391,86 @@ def clean(body):
     f["email"] = f["email"].lower() if leads.ADDRESS.fullmatch(f["email"] or "-") else ""
     if not (f["fname"] or f["lname"]) or not (f["email"] or leads._digits(f["phone"])):
         return None
+    f["came"] = came_from(body.get("came"))
     return f
+
+
+# Where a visitor came from (Jonah, 9 Nov 2026: "tracking analytics for the
+# website and using them"): the site keeps the first page of the visit and
+# the address that sent them there for the tab's life (Base.astro), and the
+# form sends it along. Only ever a page of this site, the referring site's
+# name and a campaign's tags: nothing about the visitor themselves.
+SEARCH_SITES = (("google.", "Google search"), ("bing.", "Bing"), ("duckduckgo.", "DuckDuckGo"), ("yahoo.", "Yahoo"))
+OTHER_SITES = (("facebook.", "Facebook"), ("fb.", "Facebook"), ("instagram.", "Instagram"), ("nextdoor.", "Nextdoor"),
+               ("pinterest.", "Pinterest"), ("yelp.", "Yelp"), ("bbb.org", "BBB"), ("houzz.", "Houzz"),
+               ("thumbtack.", "Thumbtack"), ("angi.", "Angi"), ("chatgpt.", "ChatGPT"), ("openai.", "ChatGPT"),
+               ("perplexity.", "Perplexity"), ("claude.ai", "Claude"), ("copilot.", "Copilot"))
+PAID = ("cpc", "ppc", "paid", "paidsearch", "paid_search")
+
+
+def _host(url):
+    m = re.match(r"https?://([^/?#:]+)", str(url or "").strip().lower())
+    return m.group(1) if m else ""
+
+
+def _site_named(host, table):
+    """The first site in the table the host belongs to: "google." matches
+    www.google.com and google.co.uk, never notgoogle.com."""
+    dotted = "." + host + "."
+    return next((name for key, name in table if "." + key in dotted), "")
+
+
+def came_from(raw):
+    """{landing, source, campaign} from what the form sent, or {} when it sent
+    nothing (a form from before 9 Nov, or a browser that keeps nothing)."""
+    if not isinstance(raw, dict):
+        return {}
+    landing = str(raw.get("landing") or "")[:300]
+    landing = re.sub(r"^https?://[^/]+", "", landing)
+    landing = re.sub(r"[?#].*$", "", landing).replace("<", "").replace(">", "")[:200]
+    if not landing.startswith("/"):
+        landing = ""
+    medium = _box(raw.get("medium"), 40).lower()
+    src = _box(raw.get("source"), 60)
+    campaign = _box(raw.get("campaign"), 80)
+    host = _host(raw.get("referrer"))
+    if raw.get("gclid") or medium in PAID:
+        source = "Google Ads" if (raw.get("gclid") or src.lower() in ("", "google", "adwords")) else (
+            src.capitalize() + " ads")
+    elif src:
+        source = src.capitalize() + (" (" + medium + ")" if medium else "")
+    elif not host:
+        source = "Typed in or a bookmark"
+    elif host == "ydexteriorvisions.com" or host.endswith(".ydexteriorvisions.com"):
+        source = "Our own site"
+    else:
+        source = (_site_named(host, SEARCH_SITES) or _site_named(host, OTHER_SITES) or
+                  re.sub(r"^www\.", "", host)[:60])
+    return {"landing": landing, "source": source, "campaign": campaign}
+
+
+def came_words(came):
+    if not came:
+        return ""
+    bits = [came.get("source") or ""]
+    if came.get("landing"):
+        bits.append("landed on " + came["landing"])
+    if came.get("campaign"):
+        bits.append("campaign " + came["campaign"])
+    return ", ".join(b for b in bits if b)
+
+
+def log_form(db, lead_id, f, known):
+    """Every form, from someone new or known, for the weekly website report
+    (seoweekly.read_leads). Never stops the lead."""
+    came = f.get("came") or {}
+    try:
+        db.collection("siteForms").document(lead_id).set({
+            "at": leads._stamp(), "day": dg._now().strftime("%Y-%m-%d"), "known": bool(known),
+            "landing": came.get("landing") or "", "source": came.get("source") or "",
+            "campaign": came.get("campaign") or "", "services": f.get("services") or []})
+    except Exception as err:        # noqa: BLE001
+        print("website form: not logged for the report --", err)
 
 
 def sender(request):
@@ -486,14 +565,18 @@ def take(db, f):
          "extra": [x for x in ("Already in Job Hub, so no new lead was made." if known else "",
                                "Best way to reach them: " + f["contactBy"] if f["contactBy"] else "",
                                "Heard about us: " + f["heard"] if f["heard"] else "",
+                               "Found the website: " + came_words(f.get("came")) if f.get("came") else "",
                                "Their words: " + wrote if wrote else "") if x]}
     rec = {"name": name, "address": f["address"], "fromEmail": {}}
     if not known:
         rec = {"id": lead_id, "name": name, "firstName": f["fname"], "lastName": f["lname"], "business": "", "email": email,
                "phone": f["phone"], "mobile": "", "street": "", "city": "", "state": "", "zip": "", "address": f["address"],
                "tags": f["services"], "source": "website", "addedAt": stamp, "heard": f["heard"], "contactBy": f["contactBy"],
-               "website": f, "note": "Website form, %s %d. %s" % (dg._now().strftime("%b"), dg._now().day,
-                                                                  form_text(f).replace("\n", ". ")),
+               "website": f, "came": f.get("came") or {},
+               "note": "Website form, %s %d. %s%s" % (dg._now().strftime("%b"), dg._now().day,
+                                                     form_text(f).replace("\n", ". "),
+                                                     ". Found the website: %s." % came_words(f.get("came"))
+                                                     if f.get("came") else ""),
                "fromEmail": {"messageId": None, "threadId": None, "subject": "Website form", "from": email, "form": True,
                              "website": True, "summary": what, "timing": f["timing"], "at": stamp, "draft": None, "link": None}}
         try:
@@ -502,6 +585,7 @@ def take(db, f):
             return None
     if leads._lead_card(db, lead_id, rec, r, {}, "website") is False and known:
         return None                 # the same form again: its card is there
+    log_form(db, lead_id, f, known)
     if known:
         news = {"title": "📬 Website form — " + name, "body": what + " — already in Job Hub. It's on My to-dos."}
     else:

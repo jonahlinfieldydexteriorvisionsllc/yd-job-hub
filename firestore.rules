@@ -1154,6 +1154,16 @@ service cloud.firestore {
     // the words, the time and the photos, holds one or lets it go, skips one,
     // writes one of his own (sph...), or ticks a Nextdoor one posted -- he
     // never marks a Facebook or Google one posted (only the server knows).
+    // The website's weekly report and each website form's landing page and
+    // what brought the visitor (seoweekly.py, websiteleads.log_form): the
+    // server writes them, the owner reads them (Media → Website).
+    match /seoReports/{id} {
+      allow read: if isOwner();
+    }
+    match /siteForms/{id} {
+      allow read: if isOwner();
+    }
+
     match /socialPosts/{id} {
       allow read, delete: if isOwner();
       allow create: if isOwner() && id.matches('sph[a-z0-9]+')

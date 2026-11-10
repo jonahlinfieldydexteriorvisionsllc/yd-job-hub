@@ -215,6 +215,9 @@ def run():
         # The website read page by page and asked about on Google, once a day
         # after 7 am (searchwatch.py). Last again: it takes a minute or two.
         ("site check", (), lambda: _site_check(db, people, now)),
+        # The website's weekly report on searches, visitors and what to
+        # change next, Mondays after 7 am (seoweekly.py).
+        ("website report", (), lambda: _seo_weekly(db, people, now)),
     ]
     sent = []
     for what, needs, step in steps:
@@ -243,6 +246,11 @@ def _storm_watch(db, people, prefs, now):
 def _site_check(db, people, now):
     import searchwatch
     return searchwatch.run(db, people, now)
+
+
+def _seo_weekly(db, people, now):
+    import seoweekly
+    return seoweekly.run(db, people, now)
 
 
 def _pay_sheet(db, people, now):

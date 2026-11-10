@@ -599,6 +599,33 @@ def _digest(request, path, headers):
             print("site check failed:", e)
             return (json.dumps({"error": str(e)[:300]}), 500, json_headers)
 
+    if path in ("/digest/seo-report", "/digest/seo-idea"):
+        # The website's weekly report (seoweekly.py), the owner only: worked
+        # out now (and emailed only when asked: send), or one of its ideas
+        # put on the wish board for the night run (Have Claude do it).
+        if origin_blocked(request):
+            return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+        try:
+            uid = _caller(request)
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        import seoweekly
+        try:
+            if path == "/digest/seo-idea":
+                me = (_db.collection("users").document(uid).get().to_dict() or {}).get("name") or "Jonah"
+                r = seoweekly.idea_card(_db, str(body.get("week") or ""), str(body.get("id") or ""), me)
+                return (json.dumps(r), 400 if r.get("error") else 200, json_headers)
+            rep = seoweekly.build(_db)
+            if body.get("send"):
+                seoweekly.send_email(rep)
+            return (json.dumps({"week": rep["week"], "headline": seoweekly.headline(rep),
+                                "ideas": len(rep.get("ideas") or []),
+                                "analytics": "off" if (rep.get("analytics") or {}).get("error") else "on"}),
+                    200, json_headers)
+        except Exception as e:                          # noqa: BLE001
+            print("website report failed:", e)
+            return (json.dumps({"error": str(e)[:300]}), 500, json_headers)
+
     if path == "/digest/preview":
         if origin_blocked(request):
             return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
