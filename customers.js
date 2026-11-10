@@ -482,7 +482,10 @@
   // "needs to be pulled in"). Whoever may change the Snow tab. The server
   // (/qb/snow-yes) puts it on the route the way QuickBooks' own Accept
   // would, one stop per property, and changes nothing in QuickBooks.
-  const yesFor = q => q && /^\d+$/.test(s(q.id)) && !q.sold && (!q.status || q.status === 'Pending');
+  // This season's quotes only: a yes to last winter's quote is not this
+  // winter's price.
+  const yesFor = q => q && /^\d+$/.test(s(q.id)) && !q.sold && (!q.status || q.status === 'Pending') &&
+    validDay(q.date) && snowSeasonOf(q.date) === snowSeasonOf(today());
   function snowYesBtn(c, q) {
     if (!yesFor(q) || !can('snow', 'change')) return '';
     return ' <button class="btn btn-sm" onclick="custSnowYes(\'' + sid(c.id) + '\', \'' + sid(q.id) + '\')">✓ They said yes</button>';
