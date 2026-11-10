@@ -476,6 +476,17 @@
   function quoteLine(q) {
     return (q.num ? '#' + esc(q.num) + ' · ' : '') + esc(niceDay(q.date)) + ' · ' + esc(QUOTE_WORD[q.status] || s(q.status).toLowerCase() || 'no answer yet');
   }
+  // A snow quote still waiting in QuickBooks that the customer said yes to
+  // some other way -- a signed copy by email, a call (Jonah, 10 Nov 2026:
+  // one accepted by a signed PDF whose revised copy still read Pending
+  // "needs to be pulled in"). Whoever may change the Snow tab. The server
+  // (/qb/snow-yes) puts it on the route the way QuickBooks' own Accept
+  // would, one stop per property, and changes nothing in QuickBooks.
+  const yesFor = q => q && /^\d+$/.test(s(q.id)) && !q.sold && (!q.status || q.status === 'Pending');
+  function snowYesBtn(c, q) {
+    if (!yesFor(q) || !can('snow', 'change')) return '';
+    return ' <button class="btn btn-sm" onclick="custSnowYes(\'' + sid(c.id) + '\', \'' + sid(q.id) + '\')">✓ They said yes</button>';
+  }
 
   // ------------------------------------------------------------ the list
   //
@@ -779,7 +790,7 @@
       '<div class="cu-main">' +
         '<button class="cu-name" onclick="openCustomer(\'' + id + '\')">' + esc(shownName(c)) + '</button>' +
         (k !== 'customer' ? ' <span class="cu-kind k-' + k + '">' + KIND_WORD[k] + '</span>' : '') +
-        '<div class="cu-quotes">' + f.quotes.map(q => '<div>❄️ ' + quoteLine(q) + '</div>').join('') + '</div>' +
+        '<div class="cu-quotes">' + f.quotes.map(q => '<div>❄️ ' + quoteLine(q) + snowYesBtn(c, q) + '</div>').join('') + '</div>' +
         '<div class="pp-contact">' + [c.address ? esc(c.address) : '',
           phone ? '<a href="tel:' + esc(telOf(phone)) + '">📞 ' + esc(phone) + '</a>' : ''].filter(Boolean).join(' &middot; ') + '</div>' +
       '</div>' +
@@ -2465,6 +2476,29 @@
     if (typeof showUndo === 'function') showUndo('Reached ' + (c.name || ''), () => { write(id, before, 'reached out'); render(); });
   };
 
+  let snowYesBusy = false;
+  window.custSnowYes = async function (id, estimateId) {
+    const c = customers[id];
+    const q = c && c.snow && (c.snow.quotes || []).find(x => s(x.id) === s(estimateId));
+    if (!q || snowYesBusy || !window.YDClaude) return;
+    if (!(await ydConfirm('It goes on the Snow route priced from the estimate — every property on it its own stop. ' +
+        'Nothing in QuickBooks is changed.', { title: 'Put #' + (q.num || '') + ' on the Snow route?', ok: 'Put it on the route' }))) return;
+    snowYesBusy = true;
+    showToast('Putting #' + (q.num || '') + ' on the Snow route…');
+    try {
+      const r = await YDClaude.post('/qb/snow-yes', { estimateId: s(estimateId) });
+      if (!r || r.error) { showToast((r && r.error) || 'Not put on the route'); return; }
+      const names = (r.accounts || []).map(a => a.name);
+      showToast(names.length > 1 ? names.length + ' stops on the Snow route: ' + names.join(', ')
+        : 'On the Snow route' + (names[0] ? ': ' + names[0] : '') + (r.made ? '' : ' (already there; your prices kept)'), 8000);
+    } catch (e) {
+      showToast('Not put on the route: ' + (e.message || e));
+    } finally {
+      snowYesBusy = false;
+      render();
+    }
+  };
+
   window.custSnowCalled = function (id, on) {
     const c = customers[id];
     if (!c) return;
@@ -2791,7 +2825,8 @@
             ? '<button class="btn btn-sm" onclick="custToSnow(\'' + sid(c.id) + '\')">Make a snow account</button>' : '');
       }
       if (sf) {
-        h += '<div class="cu-quotes"><span class="muted">Snow quotes:</span>' + sf.quotes.map(q => '<div>' + quoteLine(q) + '</div>').join('') + '</div>' +
+        h += '<div class="cu-quotes"><span class="muted">Snow quotes:</span>' + sf.quotes.map(q => '<div>' + quoteLine(q) +
+          (sf.onList ? snowYesBtn(c, q) : '') + '</div>').join('') + '</div>' +
           (sf.onList ? '<div class="cu-line muted">On the Snow quotes list — ' + (snowCalled(c) ? '✓ called ' + esc(niceDay(localDay(c.snowCalledAt))) : 'not called yet this season') + '.</div>' +
             (can('contacts', 'change') ? '<div class="cu-btns">' + (snowCalled(c)
               ? '<button class="btn btn-sm" onclick="custSnowCalled(\'' + sid(c.id) + '\', false)">Not called yet</button>'

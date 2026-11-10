@@ -1429,7 +1429,7 @@ def _snow_bid_now(job_id, job, e, by_hand=False):
         return out
     got, patch = snow_bid_won(job_id, e, _stamp(), by_hand=by_hand)
     if got:
-        out.update(snowDone=patch, snowAccount={"id": got[0], "made": got[1]})
+        out.update(snowDone=patch, snowAccount={"id": got[0], "made": got[1], "places": len(got[2])})
     else:
         out["snowError"] = ("Its lines in QuickBooks aren't all snow work any more, so it wasn't put on the Snow route — "
                             "add it there by hand, or book it as a job.")
@@ -2626,7 +2626,20 @@ _SNOW_MORE = r"(?:ad+i?t+i?onal\s+)?"
 SNOW_PER_INCH = re.compile(r"(?:each|every|per)\s+" + _SNOW_MORE + r"inch[^$\n]*?\b(?:beyond|past|over|above)\s*(\d+(?:\.\d+)?)[^$\n]*?\$\s*([\d,]+(?:\.\d+)?)", re.I)
 SNOW_OVER_INCH = re.compile(r"\b(?:beyond|past|over|above)\s*(\d+(?:\.\d+)?)\s*(?:in(?:ch(?:es)?)?\b|\"|”)?[^$\n]*?(?:each|every|per)\s+" + _SNOW_MORE + r"inch[^$\n]*?\$\s*([\d,]+(?:\.\d+)?)", re.I)
 SNOW_HOURLY = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)\s*/\s*(?:man[- ]?)?h(?:ou)?r", re.I)
-SNOW_BOILER = re.compile(r"^(priced per|\(for storms|\(during extended|\*price per|price is subject|estimated total)", re.I)
+SNOW_BOILER = re.compile(r"^(priced per|\(for storms|\(during extended|\*price per|\(price per|price is subject|estimated total)", re.I)
+# Where a line's work is, as Jonah writes a snow estimate for a customer with
+# more than one property (Nov 2026, a business's three lots on one
+# estimate): "Clearing of snow from lot at: 123 Main St, Madison, WI 53711".
+# The street, town, state and ZIP after "at", on that line of the words: a
+# house number (a rural one too, "N1234", and a range, "2901-21") then a
+# street name -- never "at 2 in. or more" -- and no more than a line's worth
+# before the state and ZIP.
+SITE_AT = re.compile(r"\b[Aa][Tt]:?\s+([A-Za-z]?\d+(?:-\d+)?[A-Za-z]?\s+(?!(?:in|inch(?:es)?|ft|feet|am|pm)\b)[A-Za-z]"
+                     r"[^\n$]{0,80}?[,\s]+[A-Z]{2}\.?\s+\d{5}(?:-\d{4})?)\b")
+# Salt priced inside the plow line's own words, the way he writes it --
+# "Salt application at: <address>" / "(price per application)" / "$81.00" --
+# rather than as a Salt product line of its own.
+SALT_SAID = re.compile(r"\bsalt", re.I)
 
 
 def _snow_lines(e, end_names):
@@ -2652,6 +2665,30 @@ def _dollars_cents(s):
         return int(round(float(str(s).replace(",", "")) * 100))
     except ValueError:
         return None
+
+
+def _salt_in_words(desc):
+    """Salt priced inside a plow line's words -- a line naming salt, and a $
+    on it or on one of the two lines under it ("Salt application at: ..." /
+    "(price per application)" / "$81.00") -- as (cents, paw-friendly?), or
+    None. A visit's price or the per-inch rate is never taken for it, and
+    "salt included" / "no salt" is not a price for salt."""
+    rows = [s.strip() for s in str(desc or "").splitlines()]
+    for i, row in enumerate(rows):
+        if not SALT_SAID.search(row):
+            continue
+        if re.search(r"includ|\bno salt|\bwithout salt", row, re.I):
+            return None
+        for near in rows[i:i + 3]:
+            if near is not row and (SNOW_TIER.search(near) or SNOW_TIER_UP.search(near) or SNOW_PER_INCH.search(near)
+                                    or SNOW_OVER_INCH.search(near) or SNOW_HOURLY.search(near) or SALT_SAID.search(near)):
+                break
+            m = re.search(r"\$\s*([\d,]+(?:\.\d+)?)", near)
+            if m:
+                cents = _dollars_cents(m.group(1))
+                return (cents, bool(re.search(r"paw", " ".join(rows[i:i + 3]), re.I))) if cents else None
+        return None
+    return None
 
 
 def _snow_terms(lines):
@@ -2694,8 +2731,16 @@ def _snow_terms(lines):
         m = SNOW_PER_INCH.search(desc) or SNOW_OVER_INCH.search(desc)
         if m:
             per_inch = {"cents": _dollars_cents(m.group(2)) or 0, "aboveInches": float(m.group(1))}
+        # Salt priced in this line's own words (and in its amount), when no
+        # Salt line says it: so much an application, as a Salt line would.
+        said = None if any(SALT_ITEM.search(x[0]) for x in lines) else _salt_in_words(desc)
+        if said:
+            salt = True
+            extras.append({"name": "Salt" + (" — paw-friendly" if said[1] else ""), "cents": said[0], "per": "application"})
         if "1-3" not in tiers:
-            tiers["1-3"] = cents
+            # His way: the line's amount is the visit and the salt together.
+            # An amount no bigger than the salt is the visit's alone.
+            tiers["1-3"] = cents - said[0] if said and cents > said[0] else cents
         words += [s.strip() for s in desc.splitlines() if s.strip() and "$" not in s and not SNOW_BOILER.match(s.strip())]
     # A tier with no price of its own takes the one below (snow.js resolveTier).
     below = {"1-3": None, "4-6": "1-3", "6+": "4-6", "9+": "6+"}
@@ -2740,10 +2785,61 @@ def _snow_season(now):
     return "%d-%s" % (y, str(y + 1)[2:])
 
 
+def _site_of(ln):
+    """The property a line's words put its work at (SITE_AT) as address
+    parts, or None when it names none."""
+    m = SITE_AT.search(str((ln or {}).get("Description") or ""))
+    if not m:
+        return None
+    parts = _addr_parts({"Line1": " ".join(m.group(1).split())})
+    return parts if _street_key(parts["address"]) else None
+
+
+def _snow_sites(lines):
+    """One snow estimate for several properties -> [(address parts, its
+    lines)], in the estimate's order -- each a stop of its own on the route,
+    priced from its own line (Jonah, 10 Nov 2026: "locations can and should
+    be split on the route"). None when the estimate is for one place, the
+    usual: fewer than two plow lines that each name a different address.
+    A plow line naming no address, salt or an add-on naming none, go with the
+    first property; an hourly rate (a Labor line) holds at every one."""
+    plows = [x for x in lines if SNOW_ITEM.search(x[1]) and not SALT_ITEM.search(x[0])]
+    sites, order, loose = {}, [], []
+    for x in plows:
+        parts = _site_of(x[2])
+        if not parts:
+            loose.append(x)
+            continue
+        key = _street_key(parts["address"])
+        if key not in sites:
+            sites[key] = {"parts": parts, "lines": []}
+            order.append(key)
+        sites[key]["lines"].append(x)
+    if len(order) < 2:
+        return None
+    sites[order[0]]["lines"] += loose
+    for x in lines:
+        if any(x is p for p in plows):
+            continue
+        parts = _site_of(x[2])
+        key = _street_key(parts["address"]) if parts else None
+        if key in sites:
+            sites[key]["lines"].append(x)
+        elif LABOR_WORD.search(x[1]) and not SNOW_ITEM.search(x[1]):
+            for k in order:
+                sites[k]["lines"].append(x)
+        else:
+            sites[order[0]]["lines"].append(x)
+    return [(sites[k]["parts"], sites[k]["lines"]) for k in order]
+
+
 def snow_account(e, cust, end_names, stamp, crew_notes=""):
     """A snow estimate -> its Snow account: the one he has for this customer,
     joined to the estimate, or a new one priced from it. Returns
-    (account id, made) or None when the estimate is not snow work.
+    (account id, made, [every account id]) or None when the estimate is not
+    snow work. An estimate for several properties (_snow_sites) makes one
+    account each -- "<business> — <street>" -- and the first is the one
+    returned; made is True when any was new.
     crew_notes: a snow bid's notes for the crew (estimate.js), added to a new
     account's area notes -- the crew read those on the route."""
     lines = _snow_lines(e, end_names)
@@ -2752,13 +2848,30 @@ def snow_account(e, cust, end_names, stamp, crew_notes=""):
     db = _db()
     cust = cust or {}
     name = (cust.get("DisplayName") or (e.get("CustomerRef") or {}).get("name") or "").strip() or "Snow customer"
-    parts = _best_addr(e, cust, name)
     accounts = {s.id: (s.to_dict() or {}) for s in db.collection("snowAccounts").stream()}
+    ref = {"estimateId": str(e.get("Id")), "docNumber": str(e.get("DocNumber") or ""), "at": stamp}
+    sites = _snow_sites(lines)
+    if not sites:
+        aid, made = _snow_place(db, accounts, e, cust, lines, _best_addr(e, cust, name), name, "", ref, crew_notes)
+        return aid, made, [aid]
+    # A business with several lots: the business's name, then the street, so
+    # the three stops can be told apart on the route and on every invoice.
+    base = str(cust.get("CompanyName") or "").strip() or name
+    got = [_snow_place(db, accounts, e, cust, site_lines, parts, base + " — " + parts["address"], parts["address"], ref, crew_notes)
+           for parts, site_lines in sites]
+    return got[0][0], any(made for _, made in got), [aid for aid, _ in got]
+
+
+def _snow_place(db, accounts, e, cust, lines, parts, name, site, ref, crew_notes):
+    """One property's Snow account (snow_account): the one he has there --
+    the same name, or the same house number and street in the same town --
+    joined to the estimate and left priced as he set it, or a new one priced
+    from these lines. Returns (account id, made); a new one goes into
+    `accounts`, so the next property can't take its id."""
     key = _street_key(parts["address"])
     have = next((aid for aid, a in accounts.items() if _norm_name(a.get("name")) == _norm_name(name)), None) or \
         next((aid for aid, a in accounts.items() if key and _street_key(a.get("street") or a.get("address")) == key
               and _same_town(a, parts)), None)
-    ref = {"estimateId": str(e.get("Id")), "docNumber": str(e.get("DocNumber") or ""), "at": stamp}
     # A new account is tied to its customer by QuickBooks' own id
     # (customers.js reads customerId). One found by name or street is not:
     # that is a guess, and the Customers tab's "To sort" ties it by hand.
@@ -2771,7 +2884,7 @@ def snow_account(e, cust, end_names, stamp, crew_notes=""):
     if crew:
         notes = ((notes + " · ") if notes else "") + "For the crew: " + crew
     notes = notes[:1000]
-    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "account"
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40].strip("-") or "account"
     aid, n = base, 2
     while aid in accounts:
         aid, n = "%s-%d" % (base, n), n + 1
@@ -2783,18 +2896,24 @@ def snow_account(e, cust, end_names, stamp, crew_notes=""):
         print("quickbooks snow: %s not found on the map: %s" % (aid, err))
     one_line = ", ".join(s for s in (parts["address"], parts["city"], " ".join(s for s in (parts["state"], parts["zip"]) if s)) if s)
     item_names = " ".join(i for _, i, _ in lines)
+    business = str(cust.get("CompanyName") or "")
     pub = {
         "name": name, "firstName": str(cust.get("GivenName") or ""), "lastName": str(cust.get("FamilyName") or ""),
-        "business": str(cust.get("CompanyName") or ""),
+        "business": business,
         "address": one_line, "street": parts["address"], "city": parts["city"], "state": parts["state"], "zip": parts["zip"],
         "town": (geo_hit or {}).get("town") or parts["city"],
         "lat": (geo_hit or {}).get("lat"), "lng": (geo_hit or {}).get("lng"), "geocodedAs": (geo_hit or {}).get("matched"),
-        "type": "commercial" if re.search(r"commercial", item_names, re.I) else "residential",
+        # A business's several lots are a business's, whatever the product says.
+        "type": "commercial" if re.search(r"commercial", item_names, re.I) or (site and business) else "residential",
         "active": True, "season": _snow_season(_now()), "minTriggerInches": 1, "serviceWindow": "standard",
         "areaNotes": notes, "vacationHolds": [], "driveSqFt": None, "walkSqFt": None, "saltApplies": salt,
         "fromQuickBooks": {"estimateId": str(e.get("Id")), "docNumber": str(e.get("DocNumber") or "")},
         "customerId": cust_id,
     }
+    if site:
+        # Which of the customer's properties this is: snow.js keeps it on the
+        # name when the account is saved from its form.
+        pub["site"] = site
     priv = {
         "phone": str(((cust.get("PrimaryPhone") or cust.get("Mobile") or {}).get("FreeFormNumber")) or ""),
         "email": str(((e.get("BillEmail") or cust.get("PrimaryEmailAddr") or {}).get("Address")) or ""),
@@ -2804,6 +2923,7 @@ def snow_account(e, cust, end_names, stamp, crew_notes=""):
     batch.set(db.collection("snowAccounts").document(aid), pub)
     batch.set(db.collection("snowAccounts").document(aid).collection("private").document("rates"), priv)
     batch.commit()
+    accounts[aid] = pub
     return aid, True
 
 
@@ -2907,7 +3027,7 @@ def snow_bid_won(job_id, e, stamp, end_names=None, by_hand=False):
     got = snow_account(e, _customer_of(e), end_names if end_names is not None else _end_names(), stamp, crew_notes=crew)
     if not got:
         return None, {}
-    aid, made = got
+    aid, made = got[0], got[1]
     patch = {"snowChecked": True, "removeWhy": "snow", "replacedBy": "snow:" + aid,
              "removeNote": ("They said yes" if by_hand else "Snow bid accepted") + " — on the Snow route" +
                            ("" if made else " (they were there already; your prices kept)"),
@@ -2948,7 +3068,7 @@ def snow_bids(jobs, have=None):
         got, patch = snow_bid_won(jid, e, stamp, end_names)
         if got:
             j.update(patch)
-            news.append({"jobId": jid, "kind": "snowAdded" if got[1] else "snowLinked",
+            news.append({"jobId": jid, "kind": "snowAdded" if got[1] else "snowLinked", "places": len(got[2]),
                          "name": str(j.get("customerName") or (e.get("CustomerRef") or {}).get("name") or "A customer"),
                          "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
             continue
@@ -2960,6 +3080,64 @@ def snow_bids(jobs, have=None):
                      "name": str(j.get("customerName") or "a customer"),
                      "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
     return news
+
+
+def snow_yes(body, by=""):
+    """A snow estimate the customer said yes to some other way than
+    QuickBooks' own Accept -- a signed copy sent back by email, a call --
+    put on the Snow route now (customers.js "They said yes", on a snow quote
+    still waiting). Jonah, 10 Nov 2026, of one accepted by a signed PDF whose
+    revised copy still read Pending: "needs to be pulled in". The same as
+    import_accepted does once QuickBooks says Accepted: one account per
+    property (snow_account), joined to any he already has there. A bid built
+    in Job Hub goes through its job (snow_bid_won), as its own "Put them on
+    the Snow route" does. QuickBooks is only read, never changed. The
+    estimate is then counted as brought in, so QuickBooks' Accept later
+    brings nothing in twice."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        raise RuntimeError("QuickBooks is connected to the test company -- only your real QuickBooks goes on the Snow route")
+    eid = str(body.get("estimateId") or "").strip()
+    if not eid or not re.match(r"^\d+$", eid):
+        raise RuntimeError("Which estimate?")
+    e = _query_one("Estimate", "Id = '%s'" % _quote(eid))
+    if not e:
+        return {"error": "That estimate isn't in QuickBooks any more."}
+    num = str(e.get("DocNumber") or "")
+    if (e.get("TxnStatus") or "") == "Rejected":
+        return {"error": "QuickBooks says #%s was turned down. Mark it Pending or Accepted there first." % num}
+    db = _db()
+    stamp = _stamp()
+    end_names = _end_names()
+    job_id = None
+    note = str(e.get("PrivateNote") or "").strip()
+    if note.startswith(_job_note("")):
+        job_id = note[len(_job_note("")):].strip() or None
+    if not job_id:
+        hit = next(iter(db.collection("jobs").where("qbEstimate.id", "==", eid).limit(1).stream()), None)
+        job_id = hit.id if hit else None
+    if job_id:
+        snap = db.collection("jobs").document(job_id).get()
+        if snap.exists and not (snap.to_dict() or {}).get("deletedAt"):
+            got, _patch = snow_bid_won(job_id, e, stamp, end_names, by_hand=True)
+        else:
+            job_id, got = None, snow_account(e, _customer_of(e), end_names, stamp)
+    else:
+        got = snow_account(e, _customer_of(e), end_names, stamp)
+    if not got:
+        return {"error": "Not every line on #%s is snow work, so it isn't a snow contract." % num}
+    realm = (_load_tokens() or {}).get("realmId") or "none"
+    # Counted as brought in (import_accepted's own record), merged, so its
+    # hourly write -- which merges too -- keeps it.
+    db.collection("integrations").document("quickbooksImport").set(
+        {realm: {"seen": {eid: (job_id or ("snow:" + got[0]))}}}, merge=True)
+    names = {}
+    for aid in got[2]:
+        s = db.collection("snowAccounts").document(aid).get()
+        names[aid] = str(((s.to_dict() or {}) if s.exists else {}).get("name") or aid)
+    print("quickbooks snow yes: #%s by %s -> %s" % (num, by or "?", ", ".join(got[2])))
+    return {"ok": True, "docNumber": num, "made": got[1], "jobId": job_id,
+            "accounts": [{"id": aid, "name": names[aid]} for aid in got[2]]}
 
 
 def import_accepted(jobs):
@@ -3032,7 +3210,7 @@ def import_accepted(jobs):
             got = snow_account(e, cust, end_names, stamp)
             if got:
                 seen[eid] = "snow:" + got[0]
-                news.append({"jobId": "snow" + eid, "kind": "snowAdded" if got[1] else "snowLinked",
+                news.append({"jobId": "snow" + eid, "kind": "snowAdded" if got[1] else "snowLinked", "places": len(got[2]),
                              "name": str((e.get("CustomerRef") or {}).get("name") or "A customer"),
                              "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
                 continue

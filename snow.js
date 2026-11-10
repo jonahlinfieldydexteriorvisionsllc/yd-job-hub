@@ -740,6 +740,7 @@
 
     const nm = namesOf(a), ad = partsOf(a);
     set('sfFirst', nm.first); set('sfLast', nm.last); set('sfBusiness', nm.business);
+    set('sfSite', a && a.site);
     set('sfStreet', ad.street); set('sfCity', ad.city); set('sfState', ad.state || 'WI'); set('sfZip', ad.zip);
     set('sfType', (a && a.type) || 'residential');
     set('sfPhone', p && p.phone); set('sfEmail', p && p.email);
@@ -801,12 +802,17 @@
   window.saveSnowForm = async function () {
     const btn = document.getElementById('sfSaveBtn');
     const firstName = val('sfFirst').trim(), lastName = val('sfLast').trim(), business = val('sfBusiness').trim();
-    // The name shown everywhere: the business, or the person.
-    const name = business || [firstName, lastName].filter(Boolean).join(' ');
+    // Which of a customer's properties this is, when they have several, each
+    // its own stop (Nov 2026: one business's three lots on one estimate).
+    const site = val('sfSite').trim();
+    // The name shown everywhere: the business, or the person -- and the
+    // property after it, so the stops can be told apart on the route.
+    const who = business || [firstName, lastName].filter(Boolean).join(' ');
+    const name = who && site ? who + ' — ' + site : who;
     const parts = { street: val('sfStreet').trim(), city: val('sfCity').trim(),
                     state: (val('sfState').trim() || 'WI').toUpperCase(), zip: val('sfZip').trim() };
     const address = oneLine(parts);
-    if (!name)    { showToast('Give the customer a first and last name, or a business name'); return; }
+    if (!who)     { showToast('Give the customer a first and last name, or a business name'); return; }
     if (!parts.street) { showToast('A street address is needed — the route and weather depend on it'); return; }
     if (!parts.city && !parts.zip) { showToast('Add the city or the ZIP so the address can be found'); return; }
 
@@ -883,7 +889,7 @@
     const kept = k => (!moved && existing[k] != null ? existing[k] : null);
     const pub = {
       name: name,
-      firstName: firstName, lastName: lastName, business: business,
+      firstName: firstName, lastName: lastName, business: business, site: site,
       address: address,
       street: parts.street, city: parts.city, state: parts.state, zip: parts.zip,
       town: geo ? geo.town : (parts.city || kept('town')),

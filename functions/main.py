@@ -291,8 +291,10 @@ def _quickbooks(request, path, headers):
                        "/qb/estimates-now", "/qb/invoice-take")
     # A customer's contact details, from the Customers tab: whoever may change Contacts.
     contacts = path in ("/qb/customer-save", "/qb/customers-now")
+    # A snow estimate put on the Snow route by hand: whoever may change the Snow tab.
+    snowyes = path == "/qb/snow-yes"
     try:
-        uid = _caller(request, "billing", "change") if billing else             _caller(request, "contacts", "change") if contacts else _caller(request)
+        uid = _caller(request, "billing", "change") if billing else             _caller(request, "contacts", "change") if contacts else             _caller(request, "snow", "change") if snowyes else _caller(request)
     except PermissionError as e:
         return (json.dumps({"error": str(e)}), 401, json_headers)
 
@@ -389,6 +391,13 @@ def _quickbooks(request, path, headers):
                     print("estimates-now: accepted estimates not brought in:", err)
             _tell_owner(news)
             result = {"ok": True, "news": len(news)}
+        elif path == "/qb/snow-yes":
+            # "They said yes" on a snow quote (customers.js): a snow estimate
+            # the customer accepted some other way, on the Snow route now --
+            # one stop per property. QuickBooks is only read.
+            who = (_db.collection("users").document(uid).get().to_dict() or {}).get("name") or ""
+            with qb._holding_tokens():
+                result = qb.snow_yes(body, who)
         elif path == "/qb/customer-save":
             # A customer's details changed in Job Hub (customers.js): into
             # QuickBooks now. {id, fields, was, force}
@@ -819,8 +828,13 @@ def _tell_owner(news):
         elif n["kind"] in ("snowAdded", "snowLinked"):
             # A snow contract accepted in QuickBooks (quickbooks.snow_account).
             title = "❄ Snow contract accepted"
-            body = ("%s accepted estimate%s — added to the Snow route." if n["kind"] == "snowAdded"
-                    else "%s accepted estimate%s — joined to their Snow account (your prices kept).") % (n["name"], num)
+            places = int(n.get("places") or 1)
+            if places > 1:
+                # One estimate for several properties: one stop each (snow_account).
+                body = "%s accepted estimate%s — %d properties, each its own stop on the Snow route." % (n["name"], num, places)
+            else:
+                body = ("%s accepted estimate%s — added to the Snow route." if n["kind"] == "snowAdded"
+                        else "%s accepted estimate%s — joined to their Snow account (your prices kept).") % (n["name"], num)
         elif n["kind"] == "followup":
             # The follow-up plan (followup.auto): its own words.
             title, body = n["title"], n["body"]

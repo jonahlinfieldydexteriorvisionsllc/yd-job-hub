@@ -151,10 +151,17 @@
   function autoMatch() {
     const accounts = (window.YDSnow && YDSnow.accounts()) || {};
     const byName = byTidyName(customers);
+    const known = {};
+    customers.forEach(o => { known[String(o.id)] = true; });
     let added = 0;
     Object.keys(accounts).forEach(id => {
       if (!unset(map.customers[id])) return;
-      const hit = byName[tidy(accounts[id].name)];
+      // The QuickBooks customer the account was made for (the server ties
+      // one made from an estimate by QuickBooks' own id), before a guess by
+      // name: one customer's several properties are named apart on the route
+      // ("<business> — <street>") and match no QuickBooks name.
+      const cid = String(accounts[id].customerId || '');
+      const hit = (cid && known[cid] ? cid : '') || byName[tidy(accounts[id].name)];
       if (hit) { map.customers[id] = hit; added++; }
     });
     const byItem = byTidyName(items);
