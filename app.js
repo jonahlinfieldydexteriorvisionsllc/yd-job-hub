@@ -4707,6 +4707,24 @@ function jobWhat(d) {
 }
 // "Pat Smith · Paver patio".
 function jobLabel(name, what) { return what ? name + ' · ' + what : name; }
+// What a job is picked by when something bought is put on it (Jonah, 10 Nov
+// 2026: "when searching a job for a material it should say the client name
+// estimate number and then the job total price", "it should also say the
+// status of the job"): ['#1234', '$9,850.00', 'In progress'], in that order,
+// each left out when the job has none. The price is the one the Bids board and
+// Search show (a snow bid's price per push), and only with `withPrice`: the
+// crew pick from the same list and never see what a job is worth. The status
+// is the job's one stage (jobStage), Invoiced and Paid included.
+function jobPickParts(d, withPrice) {
+  d = d || {};
+  const est = String(d.estimateNumber || '').trim();
+  let price = '';
+  if (withPrice) {
+    const p = parseMoney(d.jobPrice);
+    price = p ? fmtMoney(p) : perPushText(d);
+  }
+  return [est ? '#' + est : '', price, jobStage(d).name].filter(Boolean);
+}
 // The box on the Job tab shows what goes there when it is left blank.
 function crewWhatHint() {
   const box = document.getElementById('crewWhat');

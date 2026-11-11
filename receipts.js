@@ -338,12 +338,21 @@
         const status = normStatus(j.jobStatus, j), done = status === 'complete' ? new Date(j.completedAt || '').getTime() : NaN;
         return { id: j._id, name: (j.customerName || '').trim() || 'Untitled job', est: String(j.estimateNumber || '').trim(),
           status: status, rank: order[status] + (done < oldBefore ? 1 : 0),
-          dead: !!(j.deletedAt || j.removeWhy || (status === 'quoting' && j.bidStage === 'lost')) };
+          dead: !!(j.deletedAt || j.removeWhy || (status === 'quoting' && j.bidStage === 'lost')),
+          parts: pickParts(j, sees()) };
       })
       .sort((a, b) => (a.rank - b.rank) || a.name.localeCompare(b.name));
   }
+  // The customer, then the job's estimate #, its price and its stage
+  // (app.js jobPickParts): "Pat Smith · #1234 · $9,850.00 · In progress".
+  // An older app.js without it: the number alone, as before.
+  function pickParts(d, withPrice) {
+    if (typeof jobPickParts === 'function') return jobPickParts(d, withPrice);
+    const est = String((d && d.estimateNumber) || '').trim();
+    return est ? ['#' + est] : [];
+  }
   function jobLabel(j) {
-    return j.name + (j.est ? ' #' + j.est : '') + (j.status === 'complete' ? ' (complete)' : '');
+    return [j.name].concat(j.parts || []).join(' · ');
   }
 
   // ------------------------------------------------------------ writing
@@ -2865,15 +2874,31 @@
     return { forTo: 'job', jobId: e.targetId, how: 'clock',
              forName: (b && b.name) || (YDClock.label ? YDClock.label(e) : '') || 'the job' };
   }
+  const BOARD_STAGE = { booked: 'Booked', scheduled: 'Booked', inprogress: 'In progress', complete: 'Finished' };
   // The jobs anyone may file a receipt to: the crew's job list (jobBoard),
-  // which the office has too; bids are not on it.
+  // which the office has too; bids are not on it. Each says its estimate #,
+  // price and stage under the name (Jonah, 10 Nov 2026), read off the job
+  // itself by whoever sees the jobs. The crew's phone has the board, which
+  // carries neither a number nor a price, and their own copies of the booked
+  // jobs (crewjobs.js, the number their Jobs tab shows): the number and
+  // whether it is booked, in progress or finished (BOARD_STAGE), no price.
   function boardJobs() {
     const b = (window.YDClock && YDClock.board && YDClock.board()) || {};
-    let list = Object.keys(b).filter(id => b[id]).map(id => ({ id, name: String(b[id].name || 'Job'),
-      est: String(b[id].est || b[id].estimateNumber || ''), what: String(b[id].what || ''), status: b[id].status || '' }));
+    const docs = {}, crewEst = {};
+    if (sees() && typeof loadAllJobs === 'function') loadAllJobs().forEach(d => { if (d && d._id) docs[d._id] = d; });
+    else if (window.YDCrewJobs && YDCrewJobs.list) {
+      try { YDCrewJobs.list().forEach(j => { if (j && j.id && j.est) crewEst[j.id] = String(j.est); }); } catch (e) { /* no copies yet */ }
+    }
+    const partsOf = (id, e, est) => (docs[id] ? pickParts(docs[id], true)
+      : [est ? '#' + est : '', BOARD_STAGE[e.status] || ''].filter(Boolean));
+    let list = Object.keys(b).filter(id => b[id]).map(id => {
+      const est = String(b[id].est || b[id].estimateNumber || crewEst[id] || '');
+      return { id, name: String(b[id].name || 'Job'), est: est, what: String(b[id].what || ''), status: b[id].status || '',
+               parts: partsOf(id, b[id], est) };
+    });
     // The office before the board has come down: its own jobs.
     if (!list.length && sees()) list = jobsList().filter(j => j.status !== 'quoting' && !j.dead)
-      .map(j => ({ id: j.id, name: j.name, est: j.est, what: '', status: j.status }));
+      .map(j => ({ id: j.id, name: j.name, est: j.est, what: '', status: j.status, parts: j.parts }));
     const order = { inprogress: 0, booked: 1, scheduled: 1, complete: 3 };
     const rank = j => (order[j.status] != null ? order[j.status] : 2);
     return list.sort((a, c) => (rank(a) - rank(c)) || a.name.localeCompare(c.name));
@@ -3008,10 +3033,15 @@
     }
     const all = boardJobs();
     const words = pickSearch.toLowerCase().split(/\s+/).filter(Boolean);
-    const hit = j => words.every(w => (j.name + ' ' + j.est + ' ' + j.what).toLowerCase().indexOf(w) !== -1);
+    const hit = j => words.every(w => (j.name + ' ' + j.est + ' ' + j.what + ' ' + (j.parts || []).join(' ')).toLowerCase().indexOf(w) !== -1);
     const open = all.filter(j => j.status !== 'complete' && hit(j)), done = all.filter(j => j.status === 'complete' && hit(j));
     const cur = changing && rq[changing] && rq[changing].forTo === 'job' ? rq[changing].jobId : '';
-    const jobBtn = j => tap('\'job\',\'' + safeId(j.id) + '\'', esc(j.name) + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
+    // A line breaks between "#1234", "$9,850.00" and "In progress", never
+    // inside one, on a phone's narrow button -- and after a dot, which stays
+    // with the word before it, never starting the next line.
+    const partsHtml = j => ((j.parts || []).length ? '<span class="rc-for-sub rc-for-parts">' +
+      j.parts.map((p, i) => '<span>' + esc(p) + (i < j.parts.length - 1 ? ' ·' : '') + '</span>').join(' ') + '</span>' : '');
+    const jobBtn = j => tap('\'job\',\'' + safeId(j.id) + '\'', esc(j.name) + partsHtml(j) +
       (j.what ? '<span class="rc-for-sub">' + esc(j.what) + '</span>' : ''), j.id === cur ? 'on' : '');
     body.innerHTML =
       '<p class="rc-for-lead">' + (changing ? 'Where does this receipt go?' : 'Pick where it goes, then take the photo.') + '</p>' +
