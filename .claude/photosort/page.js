@@ -25,10 +25,13 @@
   // how far off the phone says its own reading may be, up to ACC_MAX_M.
   const REACH_MILES = 0.1;
   const ACC_MAX_M = 500;
-  // Leads count for this long after they came in; finished jobs for this long
-  // after they were finished (After photos are often taken a few days late).
+  // Leads count for this long after they came in. Finished jobs count however
+  // long ago they finished (Jonah, 10 Nov 2026: "sort should include all jobs
+  // since i sometimes go visit completed jobs to get better pictures"), but an
+  // open job or a lead at the same spot comes first (ROUTINE.md): a finished
+  // one more than RECENT_DAYS back is marked `returnVisit`.
   const LEAD_DAYS = 180;
-  const FINISHED_DAYS = 30;
+  const RECENT_DAYS = 30;
   const GEO_KEY = 'ydjobhub_photoSortGeo';
   const INPUT_ID = 'ydPhotoSortIn';
   const STAGES = ['before', 'during', 'after'];
@@ -78,8 +81,9 @@
   }
 
   // Every job and lead that could own a photo taken on `day` (YYYY-MM-DD):
-  // open bids, booked and running jobs, jobs finished in the last
-  // FINISHED_DAYS, and leads with no job yet. Lost and removed ones never.
+  // open bids, booked and running jobs, finished jobs (any age; finished
+  // after the photo was taken can't be a return visit either way), and leads
+  // with no job yet. Lost and removed ones never.
   async function places(day) {
     const t = Date.parse(day + 'T12:00:00-06:00');
     const jobs = await window.YDDb.list('jobs');
@@ -88,14 +92,15 @@
       if (!j || j.removeWhy || j.deletedAt) continue;
       const st = typeof window.jobStage === 'function' ? window.jobStage(j).id : '';
       if (st === 'lost') continue;
+      let returnVisit = false;
       if (['finished', 'invoiced', 'paid'].indexOf(st) !== -1) {
         const fin = Date.parse(j.completedAt || '');
-        if (!isFinite(fin) || t - fin > FINISHED_DAYS * 864e5) continue;
+        returnVisit = !isFinite(fin) || t - fin > RECENT_DAYS * 864e5;
       }
-      // Only a job that is itself a choice stands in for its lead: a repeat
+      // Only an open or lately finished job stands in for its lead: a repeat
       // customer's old finished job doesn't hide their new lead.
-      if (j.customerId) tiedLeads.add(j.customerId);
-      out.push({ kind: 'job', id: id, j: j, stage: st });
+      if (j.customerId && !returnVisit) tiedLeads.add(j.customerId);
+      out.push({ kind: 'job', id: id, j: j, stage: st, returnVisit: returnVisit });
     }
     const customers = await window.YDDb.list('customers');
     for (const [id, c] of Object.entries(customers || {})) {
@@ -141,6 +146,7 @@
         const m = YDPhotoPlace.miles({ lat: ph.lat, lng: ph.lng }, pt) * M_PER_MILE;
         if (m > reachM) continue;
         const base = { kind: p.kind, id: p.id, stage: p.stage, feet: Math.round(m * 3.281) };
+        if (p.returnVisit) base.returnVisit = true;
         if (p.kind === 'job') {
           const j = p.j, days = clockedDays(p.id);
           hits.push(Object.assign(base, {
