@@ -1198,6 +1198,23 @@
           ' you</b>', esc(bits.join(' · ')), '', 'openPosts()'));
       }
     }
+    // Neighbors asking for work (neighborasks.js, the post finder): one
+    // line; a tap opens the list at the top of Media, a reply written for each.
+    if (isOwner() && window.YDAsks && YDAsks.fresh) {
+      const na = YDAsks.fresh();
+      if (na.length) {
+        any = true;
+        const where = Object.keys(YDAsks.sites).filter(k => na.some(a => a.site === k)).map(k => YDAsks.sites[k].name).join(' · ');
+        rows.push(line('🙋', '<b>' + na.length + ' neighbor' + (na.length === 1 ? '' : 's') + ' asking for work</b>',
+          esc(where + ' — a reply is written for ' + (na.length === 1 ? 'it' : 'each')), '', 'openAsks()'));
+      }
+      // The finder stopped, or can't read a site: he'd never know otherwise.
+      const trouble = YDAsks.trouble ? YDAsks.trouble() : '';
+      if (trouble) {
+        any = true;
+        rows.push(line('⚠️', '<b>The post finder needs you</b>', esc(trouble), '', 'openAsks()'));
+      }
+    }
     // A digging job starting within a week with no Diggers ticket yet
     // (digging.js): one tap opens the job.
     if (isOwner() && window.YDDigging && YDDigging.toFile) {
@@ -1612,7 +1629,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-paysheet', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets', 'yd-social', 'yd-bills'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-paysheet', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets', 'yd-social', 'yd-bills', 'yd-asks'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 

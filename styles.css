@@ -6483,3 +6483,21 @@ html[data-bids-page] #panel-boards .section-head { display: none; }
 .rc-odo-skip { flex:1 1 100%; text-align:left; min-height:44px; font-size:13px; }
 .rc-assign .rc-odo-skip { flex:0 1 auto; }
 .rc-assign .rc-odo-in { width:13.5em; }
+
+/* Neighbors asking for work (neighborasks.js, the post finder): one card per
+   ask at the top of the Media tab. Their words, the reply in a box he can
+   change, then Copy / Open the post / I replied / Skip. Global textareas
+   already take the width, padding and theme colours. */
+.na-ask { display:flex; flex-direction:column; gap:8px; min-width:0; }
+.na-ask + .na-ask, .na-older .na-ask { border-top:1px solid var(--border); margin-top:12px; padding-top:12px; }
+.na-head { overflow-wrap:anywhere; line-height:1.4; }
+.na-head small { display:block; color:var(--muted); font-size:13px; margin-top:2px; }
+.na-label { font-size:13px; color:var(--muted); margin-top:2px; }
+.na-reply { min-height:120px; resize:vertical; line-height:1.45; }
+.na-run { margin:10px 0 0; font-size:13px; color:var(--muted); }
+.na-run-bad { color:var(--st-now, #b42318); font-weight:600; }
+.na-older { margin-top:12px; }
+.na-older > summary { min-height:44px; display:flex; align-items:center; cursor:pointer; color:var(--brand-ink); font-size:14px; }
+/* Every button a finger's height wherever the screen is a touch one (the lead
+   button read 39 px on a tablet). */
+@media (pointer: coarse), (max-width:1024px) { .na-acts .btn { min-height:44px; } }

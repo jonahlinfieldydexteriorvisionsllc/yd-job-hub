@@ -1175,6 +1175,24 @@ service cloud.firestore {
             || request.resource.data.status in ['queued', 'held', 'skipped']
             || (request.resource.data.status == 'posted' && resource.data.place == 'nextdoor'));
     }
+    // Neighbors asking for work (neighborasks.js, the post finder): written
+    // by the routine on his PC through the Job Hub page in his own Chrome
+    // (signed in as him), read and answered by him alone. Only the words of
+    // a find and its answer may change; the server stamps notifiedAt.
+    match /neighborAsks/{id} {
+      allow read, delete: if isOwner();
+      allow create: if isOwner() && id.matches('(nd|fb)_[A-Za-z0-9_-]{4,100}')
+        && request.resource.data.status == 'new' && request.resource.data.notifiedAt == null
+        && request.resource.data.site in ['nextdoor', 'facebook']
+        && request.resource.data.url is string && request.resource.data.url.size() <= 500
+        && request.resource.data.url.matches('https://((www|m|web)[.])?(nextdoor|facebook)[.]com/.*')
+        && request.resource.data.text is string && request.resource.data.text.size() <= 1200
+        && request.resource.data.reply is string && request.resource.data.reply.size() <= 1500;
+      allow update: if isOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reply', 'doneAt', 'doneBy', 'updatedAt'])
+        && request.resource.data.status in ['new', 'replied', 'skipped']
+        && request.resource.data.reply is string && request.resource.data.reply.size() <= 1500;
+    }
     // A finished job's words for the schedule, and each month's seasonal
     // posts: written by the server (Claude), read by the owner; he may
     // change a month's.

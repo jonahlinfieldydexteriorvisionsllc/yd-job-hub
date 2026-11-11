@@ -1136,7 +1136,7 @@ function switchTab(name) {
 // on the Media tab, "not smack dab on my home page").
 const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports',
   deadlines: 'openDeadlines', posts: 'openPosts', nextdoor: 'openNextdoor', changeorders: 'openChangeOrders', paysheet: 'openPaySheet', invoices: 'openInvoices', pins: 'openPins',
-  website: 'openSiteReport' };
+  website: 'openSiteReport', asks: 'openAsks' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }

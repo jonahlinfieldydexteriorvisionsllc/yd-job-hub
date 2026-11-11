@@ -395,6 +395,8 @@
       else if (want === 'nextdoor' && window.openNextdoor) window.openNextdoor();
       // The Monday website report (sitereport.js): Media, at Website.
       else if (want === 'website' && window.openSiteReport) window.openSiteReport();
+      // A neighbor asking for work (neighborasks.js): Media, at the list.
+      else if (want === 'asks' && window.openAsks) window.openAsks();
       else if (want === 'paysheet' && window.openPaySheet) window.openPaySheet();
       else if (want === 'invoices' && window.openInvoices) window.openInvoices();
       else if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {

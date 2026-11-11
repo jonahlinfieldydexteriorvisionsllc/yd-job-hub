@@ -176,6 +176,9 @@ def run():
         ("put on their day", (cals,), lambda: _put_on(db, people, since, now, cals, prefs)),
         ("crew activity", (cals, boards), lambda: _activity(db, people, now, cals, boards, prefs)),
         ("crew notes", (), lambda: crew_notes(db, people, now)),
+        # Neighbors asking for work, found by the post finder on his PC
+        # (neighborasks.js): one buzz per run's finds, to the owner.
+        ("neighbor asks", (), lambda: neighbor_asks(db, people, now)),
         ("crew shifts", (), lambda: crew_shifts(db, people, now)),
         # A job whose every piece of work is ticked off: a to-do on the
         # owner's My to-dos to go and look at it (workdone.js).
@@ -408,6 +411,183 @@ def crew_notes(db, people=None, now=None):
         except Exception as err:          # noqa: BLE001
             print("reminders: note not stamped:", s.id, err)
     return out
+
+
+# Neighbors asking for work (neighborasks.js -- the post finder, Jonah 10 Nov
+# 2026). The routine on his PC writes each find as neighborAsks/{id} with
+# notifiedAt null; this tells the owner, once, between ASK_FROM and ASK_UNTIL
+# (a find written in the night waits for the morning), and forgets finds
+# after ASKS_KEEP_DAYS: their words are a neighbor's, kept no longer than
+# they are any use. Names below = neighborasks.js SITES / SERVICES.
+ASK_FROM, ASK_UNTIL = 7, 21
+ASKS_KEEP_DAYS = 60
+# A buzz the push service turned away is tried again on the next runs, for
+# this long after the find; then it is left to the tab and Home.
+ASK_RETRY_HOURS = 6
+# The finder runs twice a day: no run for this long, or a run that says it
+# was stopped, is one buzz of its own (neighborasks.js shows it too).
+ASK_QUIET_HOURS = 36
+ASK_SITES = {"nextdoor": "Nextdoor", "facebook": "Facebook"}
+ASK_SERVICES = {
+    "snow": "Snow removal", "walls": "Retaining wall", "patio": "Patio or walkway", "landscaping": "Landscaping",
+    "drainage": "Drainage", "cleanup": "Yard cleanup", "mulch": "Mulch or rock", "edging": "Edging",
+    "lawn": "Lawn care", "turf": "Artificial turf", "gutters": "Gutters", "other": "Yard work",
+}
+
+
+def neighbor_asks(db, people=None, now=None):
+    """Finds the owner hasn't been told about: one buzz for the run's finds
+    (one find says who and what, several say how many), opening the list on
+    the Media tab. reminderLog ask_<id> makes sure a find is told once even
+    if its stamp fails; when the push service turned the buzz away the claim
+    is given back and the next run tries again (for ASK_RETRY_HOURS). One he
+    already answered or skipped is just stamped. A finder that stopped or
+    couldn't read a site is a buzz too, once (_finder_quiet). Once a day,
+    finds older than ASKS_KEEP_DAYS are deleted."""
+    people = people if people is not None else dg._people()
+    now = now or dg._now()
+    out = []
+    owners = [uid for uid, u in people.items() if u.get("role") == "owner"]
+    hour = now.astimezone(dg.TZ).hour
+    if ASK_FROM <= hour < ASK_UNTIL:
+        try:
+            waiting = list(db.collection("neighborAsks").where("notifiedAt", "==", None).stream())
+        except Exception as err:          # noqa: BLE001
+            print("reminders: neighbor asks not read:", err)
+            waiting = []
+        tell, claimed = [], []
+        for s in waiting:
+            a = s.to_dict() or {}
+            try:
+                db.collection("reminderLog").document("ask_" + s.id).create({"at": now.isoformat()})
+                if a.get("status") == "new":
+                    tell.append(a)
+                    claimed.append(s)
+                    continue               # stamped once the buzz has gone
+            except AlreadyExists:
+                pass                       # told before; only the stamp is missing
+            _stamp_ask(s, now)
+        if tell:
+            if len(tell) == 1:
+                a = tell[0]
+                title = "🙋 %s on %s: %s" % (str(a.get("who") or "A neighbor")[:40],
+                                            ASK_SITES.get(a.get("site"), "Nextdoor"),
+                                            ASK_SERVICES.get(a.get("service"), "Yard work"))
+                body = ((str(a.get("where"))[:50] + ": ") if a.get("where") else "") + str(a.get("text") or "")
+            else:
+                title = "🙋 %d neighbors asking for work" % len(tell)
+                body = "; ".join("%s%s" % (ASK_SERVICES.get(a.get("service"), "Yard work"),
+                                           (" · " + str(a.get("where"))[:40]) if a.get("where") else "")
+                                 for a in tell)
+            body = body[:150] + " — your reply is written, tap to see it"
+            turned_away = 0
+            for uid in owners:
+                try:
+                    out.append({"uid": uid, "asks": len(tell), "phones": dg.send_push(
+                        uid, {"push": {"title": title, "body": body}},
+                        tag="yd-asks", ttl=24 * 3600, opens="asks")})
+                except Exception as err:  # noqa: BLE001
+                    turned_away += 1
+                    print("reminders: neighbor ask push failed:", uid, err)
+            # Nobody's phone reached (the push service down): the finds go
+            # back to waiting, and the next run tries again -- until they
+            # are ASK_RETRY_HOURS old, then they are left to the tab.
+            again = bool(owners) and turned_away == len(owners)
+            for s in claimed:
+                if again and _hours_since((s.to_dict() or {}).get("foundAt"), now) < ASK_RETRY_HOURS:
+                    try:
+                        db.collection("reminderLog").document("ask_" + s.id).delete()
+                    except Exception as err:  # noqa: BLE001
+                        print("reminders: neighbor ask claim not given back:", s.id, err)
+                        _stamp_ask(s, now)
+                else:
+                    _stamp_ask(s, now)
+        out.extend(_finder_quiet(db, owners, now))
+    # Forget old finds, once a day (the claim is the day's).
+    try:
+        db.collection("reminderLog").document("asksTidy_" + now.astimezone(dg.TZ).strftime("%Y-%m-%d")).create(
+            {"at": now.isoformat()})
+    except AlreadyExists:
+        return out
+    except Exception as err:              # noqa: BLE001
+        print("reminders: neighbor asks tidy not claimed:", err)
+        return out
+    cutoff = (now - datetime.timedelta(days=ASKS_KEEP_DAYS)).astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    try:
+        old = list(db.collection("neighborAsks").where("foundAt", "<", cutoff).limit(100).stream())
+        for s in old:
+            s.reference.delete()
+        if old:
+            out.append({"asksForgotten": len(old)})
+    except Exception as err:              # noqa: BLE001
+        print("reminders: old neighbor asks not deleted:", err)
+    return out
+
+
+def _stamp_ask(s, now):
+    try:
+        s.reference.update({"notifiedAt": now.isoformat()})
+    except Exception as err:              # noqa: BLE001
+        print("reminders: neighbor ask not stamped:", s.id, err)
+
+
+def _hours_since(iso, now):
+    """Hours from an ISO time (the browser's '...Z') to now; a big number when
+    it can't be read, so an unreadable find is never retried for ever."""
+    try:
+        t = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=datetime.timezone.utc)
+        return (now - t).total_seconds() / 3600
+    except (TypeError, ValueError):
+        return 1e9
+
+
+def _finder_quiet(db, owners, now):
+    """The finder's own word on its last run (settings/postFinder, written by
+    YDAsks.ran): a run that was stopped (signed out, a check) or no run for
+    ASK_QUIET_HOURS is one buzz, once per run -- the claim names the run's
+    time. Never run yet: nothing (it hasn't been set up)."""
+    out = []
+    try:
+        snap = db.collection("settings").document("postFinder").get()
+        run = snap.to_dict() if snap.exists else None
+    except Exception as err:              # noqa: BLE001
+        print("reminders: post finder's run not read:", err)
+        return out
+    if not run or not run.get("at"):
+        return out
+    import hashlib
+    at = str(run["at"])
+    problem = str(run.get("problem") or "").strip()
+    if problem:
+        key, body = "askstop_", "It couldn't finish: " + problem
+    elif _hours_since(at, now) > ASK_QUIET_HOURS:
+        key, body = "askquiet_", ("It hasn't looked for neighbors asking since %s. It needs your computer on, "
+                                  "the Claude app open and Chrome signed in to Nextdoor and Facebook." % _when_words(at))
+    else:
+        return out
+    try:
+        db.collection("reminderLog").document(key + hashlib.sha1(at.encode()).hexdigest()[:16]).create({"at": now.isoformat()})
+    except AlreadyExists:
+        return out
+    for uid in owners:
+        try:
+            out.append({"uid": uid, "finder": key.rstrip("_"), "phones": dg.send_push(
+                uid, {"push": {"title": "⚠️ The post finder needs you", "body": body[:180]}},
+                tag="yd-asks-finder", ttl=24 * 3600, opens="asks")})
+        except Exception as err:          # noqa: BLE001
+            print("reminders: post finder push failed:", uid, err)
+    return out
+
+
+def _when_words(iso):
+    try:
+        t = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(dg.TZ)
+        return "%s %d %s, %d:%02d %s" % (t.strftime("%a"), t.day, t.strftime("%b"), t.hour % 12 or 12, t.minute,
+                                         "am" if t.hour < 12 else "pm")
+    except (TypeError, ValueError):
+        return "a while"
 
 
 # How far back the work-done run looks for ticks: the run is every five

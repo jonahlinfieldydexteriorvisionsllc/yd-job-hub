@@ -146,7 +146,9 @@
   function countOnTab() {
     const c = el('mediaTabCount');
     if (!c) return;
-    const n = window.YDPosts ? window.YDPosts.needs().length : 0;
+    // Neighbors asking for work count too (neighborasks.js).
+    const asked = window.YDAsks ? window.YDAsks.count() : 0;
+    const n = (window.YDPosts ? window.YDPosts.needs().length : 0) + asked;
     const t = n ? String(n) : '';
     if (c.textContent !== t) c.textContent = t;
     if (el('tabMedia')) el('tabMedia').classList.toggle('tab-counted', !!n);
@@ -154,9 +156,12 @@
     if (typeof ydMoreDot === 'function') ydMoreDot();
     if (typeof TAB_HINT === 'object') {
       const ready = window.YDPosts ? window.YDPosts.readyToPost().length : 0;
+      const posts = n - asked;
+      const askWords = asked ? '🙋 ' + asked + ' neighbor' + (asked === 1 ? '' : 's') + ' asking for work' : '';
       TAB_HINT.media = !n ? MEDIA_HINT
-        : ready === n ? '🟡 ' + n + ' Nextdoor post' + (n === 1 ? '' : 's') + ' ready to put up'
-        : '🟡 ' + n + ' post' + (n === 1 ? ' needs' : 's need') + ' you' + (ready ? ' — ' + ready + ' for Nextdoor' : '');
+        : !posts ? askWords
+        : (askWords ? askWords + ' · ' : '🟡 ') + (ready === posts ? posts + ' Nextdoor post' + (posts === 1 ? '' : 's') + ' ready to put up'
+          : posts + ' post' + (posts === 1 ? ' needs' : 's need') + ' you' + (ready ? ' — ' + ready + ' for Nextdoor' : ''));
     }
   }
   const MEDIA_HINT = 'When each post went up and where, what goes up next, and Nextdoor posts to put up';
@@ -230,8 +235,12 @@
     if (body.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName) &&
         document.activeElement.type !== 'checkbox') { body.dataset.later = '1'; return; }
     body.dataset.later = '';
-    if (!cfg) { body.innerHTML = '<p class="empty-msg">Loading…</p>'; return; }
-    if (!cfg.on) { body.innerHTML = section('📣 Start posting', '', startHtml()); return; }
+    // Neighbors asking for work (neighborasks.js, the post finder): first on
+    // the tab whatever else is showing -- a lead waits for nobody.
+    const asks = window.YDAsks ? window.YDAsks.html() : '';
+    const afterAsks = () => { if (window.YDAsks && window.YDAsks.afterDraw) window.YDAsks.afterDraw(); };
+    if (!cfg) { body.innerHTML = asks + '<p class="empty-msg">Loading…</p>'; afterAsks(); return; }
+    if (!cfg.on) { body.innerHTML = asks + section('📣 Start posting', '', startHtml()); afterAsks(); return; }
     const views = [
       ['up', '📜 Went up', upWords()],
       ['coming', '🗓️ Coming up', comingWords()],
@@ -243,13 +252,14 @@
     const titles = { up: '📜 Posts that went up', coming: '🗓️ Coming up', schedule: '⏰ The schedule', hookup: '🔌 Hook up', site: '🔎 The website on Google' };
     body.innerHTML =
       (busy ? '<div class="sp-busy">⏳ ' + esc(busy) + '</div>' : '') +
-      readyHtml() + needsHtml() +
+      asks + readyHtml() + needsHtml() +
       '<div class="mn-views sp-views">' + views.map(([k, name, small]) =>
         '<button type="button" class="mn-view-btn' + (view === k ? ' on' : '') + '" aria-pressed="' + (view === k) +
           '" onclick="spView(\'' + k + '\')"><b>' + name + '</b><small>' + esc(small) + '</small></button>').join('') + '</div>' +
       section(titles[view] || '', view === 'up' ? upBadge() : '',
         view === 'schedule' ? autoHtml() + scheduleHtml() : view === 'hookup' ? hookupHtml() : view === 'coming' ? comingHtml() :
           view === 'site' ? (window.YDSiteReport ? window.YDSiteReport.html() : '') : upHtml());
+    afterAsks();
     // A Nextdoor push tapped: the ready card, once it has drawn.
     if (readyUntil && el('spReadyBox')) {
       const on = Date.now() < readyUntil;
@@ -766,6 +776,8 @@
   // The website report read or changed: drawn when it's the part showing, and
   // its button's words either way.
   document.addEventListener('yd-site-report', () => draw());
+  // A neighbor's ask found, answered or skipped: the count, Home, and the list.
+  document.addEventListener('yd-asks', changed);
   window.spUpPlace = k => { upPlace = PLACES.indexOf(k) !== -1 ? k : ''; open = null; draw(); };
   window.spReadOld = () => readOld(true);
   window.spDown = (id, on) => {
