@@ -2388,10 +2388,24 @@ def keep_photo(rid, raw, mime):
     return path
 
 
+def _photo_kind(raw, mime):
+    """jpeg, png or webp: from the photo's own first bytes, so a kept photo
+    whose Storage type reads application/octet-stream still goes as a
+    picture; the type it was sent with only when the bytes don't say."""
+    head = bytes(raw[:12]) if raw else b""
+    if head[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "webp"
+    return {"image/png": "png", "image/webp": "webp"}.get(mime, "jpeg")
+
+
 def forward_to_qb(db, rid, raw=None, mime=None):
     """Email the receipt's photo to QuickBooks. Writes the outcome on the
     receipt (qbForward) and returns it."""
-    from email.mime.application import MIMEApplication
+    from email.mime.image import MIMEImage
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
     to = str(((db.collection("settings").document("receipts").get().to_dict() or {}).get("qbForwardTo")) or "").strip()
@@ -2434,8 +2448,12 @@ def forward_to_qb(db, rid, raw=None, mime=None):
         if r.get("addedByName"):
             lines.append("Sent in by: " + str(r["addedByName"]))
         msg.attach(MIMEText("\n".join(lines), "plain", "utf-8"))
-        part = MIMEApplication(raw, _subtype=(mime or "image/jpeg").split("/")[-1])
-        part.add_header("Content-Disposition", "attachment", filename="receipt-%s.%s" % (rid[-12:], PHOTO_EXT.get(mime, "jpg")))
+        # Attached as a picture (image/jpeg), not a file of unknown kind:
+        # sent as application/jpeg, QuickBooks skipped it and kept only the
+        # words of the email (10 Nov 2026, the first real photo receipt).
+        kind = _photo_kind(raw, mime)
+        part = MIMEImage(raw, _subtype=kind)
+        part.add_header("Content-Disposition", "attachment", filename="receipt-%s.%s" % (rid[-12:], PHOTO_EXT["image/" + kind]))
         msg.attach(part)
         resp = requests.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
                              headers={"Authorization": "Bearer " + dg._gmail_access_token()},
