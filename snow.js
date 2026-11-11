@@ -272,9 +272,11 @@
       return;
     }
 
-    // Prices are for whoever may see Snow (or bill it); editing is Snow: change.
+    // Prices are for whoever has the Snow prices switch (or bills it).
+    // Editing is Snow: change AND the prices: the form saves the price boxes,
+    // so without them it could only refuse (editSnowAccount).
     const seesPrices = seesSnowPrices();
-    const edits = ydCan('snow', 'change');
+    const edits = ydCan('snow', 'change') && seesPrices;
     // Each account's place on the route the next storm takes -- the route
     // bar's numbers. None for one off the route (switched off, on hold).
     const place = {};
@@ -303,7 +305,7 @@
           (a.lat == null ? '<span class="snow-tag nolocation" title="Not found on the map yet, so it goes at the end of the route">no location</span>' : '') +
           (held ? '<span class="snow-tag hold">on hold</span>' : '') +
           // No map knows the address: place it by hand (pinplace.js).
-          (edits && a.lat == null && window.YDPin ? '<button class="btn btn-sm snow-edit" onclick="snowPin(\'' + safeId(id) + '\')">📍 Place the pin</button>' : '') +
+          (ydCan('snow', 'change') && a.lat == null && window.YDPin ? '<button class="btn btn-sm snow-edit" onclick="snowPin(\'' + safeId(id) + '\')">📍 Place the pin</button>' : '') +
           // There was no way to change an account once it was added.
           (edits ? '<button class="btn btn-sm snow-edit" onclick="editSnowAccount(\'' + safeId(id) + '\')">Edit</button>' : '') +
         '</div>' +
@@ -1145,6 +1147,7 @@
     }
     if (key) start(); else render();
     const add = document.getElementById('snowAddBtn');
-    if (add) add.hidden = !ydCan('snow', 'change');
+    // A new account is mostly its prices: the same rule as Edit.
+    if (add) add.hidden = !(ydCan('snow', 'change') && seesSnowPrices());
   });
 })();
