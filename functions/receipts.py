@@ -2402,6 +2402,27 @@ def _photo_kind(raw, mime):
     return {"image/png": "png", "image/webp": "webp"}.get(mime, "jpeg")
 
 
+def _vehicles_on(r):
+    """[(vehicle name, odometer or None)] for the QuickBooks email: from the
+    receipt's vehicle lines, else from what the photo was sent in for. One
+    entry a vehicle; a reading on any of its lines is kept."""
+    out = {}
+    for s in r.get("splits") or []:
+        if isinstance(s, dict) and s.get("to") == "vehicle" and str(s.get("name") or "").strip():
+            name = str(s["name"]).strip()
+            odo = _odometer(s.get("odometer"))
+            if out.get(name) is None:
+                out[name] = odo
+    sent = r.get("sentFor") or {}
+    if sent.get("to") == "vehicle" and str(sent.get("name") or "").strip():
+        name = str(sent["name"]).strip()
+        if not out:
+            out[name] = _odometer(sent.get("odometer"))
+        elif name in out and out[name] is None:
+            out[name] = _odometer(sent.get("odometer"))
+    return list(out.items())
+
+
 def forward_to_qb(db, rid, raw=None, mime=None):
     """Email the receipt's photo to QuickBooks. Writes the outcome on the
     receipt (qbForward) and returns it."""
@@ -2439,12 +2460,14 @@ def forward_to_qb(db, rid, raw=None, mime=None):
             lines.append("Total: " + money)
         if r.get("date"):
             lines.append("Date: " + str(r["date"])[:10])
-        # A vehicle's service: the truck and what its odometer said.
-        sent = r.get("sentFor") or {}
-        if sent.get("to") == "vehicle" and sent.get("name"):
-            lines.append("Vehicle: " + str(sent["name"]))
-            if _odometer(sent.get("odometer")) is not None:
-                lines.append("Odometer: {:,} miles".format(_odometer(sent["odometer"])))
+        # A vehicle's service: the truck and what its odometer said. Once
+        # filed, the reading lives on the vehicle's line of the receipt (typed
+        # there later too); a photo sent the moment it came in has only what
+        # was picked with it (sentFor).
+        for name, odo in _vehicles_on(r):
+            lines.append("Vehicle: " + name)
+            if odo is not None:
+                lines.append("Odometer: {:,} miles".format(odo))
         if r.get("addedByName"):
             lines.append("Sent in by: " + str(r["addedByName"]))
         msg.attach(MIMEText("\n".join(lines), "plain", "utf-8"))
