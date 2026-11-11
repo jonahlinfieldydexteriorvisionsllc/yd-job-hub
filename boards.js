@@ -3256,7 +3256,7 @@
       // day; the reminder buzzes the phone (functions/reminders.py).
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Time (if it has one)</span>' +
-          '<input type="time" id="cdTime" value="' + esc(k.dueTime || '') + '" onchange="cardRemindHint()" onkeydown="cardEnter(event)"></div>' +
+          '<input type="time" id="cdTime" value="' + esc(k.dueTime || '') + '" onchange="cardRemindHint(); cardPlaceFollow()" onkeydown="cardEnter(event)"></div>' +
         '<div class="field"><span class="label">Reminder</span><select id="cdRemind" onchange="cardRemindHint()">' +
           YDRemind.optionsHtml(k) + '</select></div>' +
       '</div>' +
@@ -3299,7 +3299,7 @@
         '<div class="jobpick-list" id="cdJobList" role="listbox" hidden></div>' +
         '<div class="hint">Crew see only the job’s name, never its price.</div></div>') +
       '<div class="field"><span class="label">Notes</span>' +
-        '<textarea id="cdNotes" rows="3" placeholder="Details, measurements, where to find things">' +
+        '<textarea id="cdNotes" rows="3" placeholder="Details, measurements, where to find things" onchange="cardPlaceFollow()">' +
         esc(k.notes || '') + '</textarea></div>' +
       '<div class="field"><span class="label">Checklist — one item per line</span>' +
         '<textarea id="cdList" rows="4" placeholder="e.g.\n4 bags polymeric sand\nedge restraint">' +
@@ -3398,19 +3398,27 @@
     if (!box || !chips || !board) return;
     const type = val('cdType') || YDRemind.typeOf({ title: val('cdTitle'),
       labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value) }, { board: board });
-    const usual = YDRemind.usualPlace(type);
-    if (!box.dataset.picked) box.value = usual || 'either';
+    // What Home will do with it until a place is tapped (remind.js
+    // placeWhy): its kind's usual place, else what its words say.
+    const how = YDRemind.placeWhy({ title: val('cdTitle'), notes: val('cdNotes'), dueTime: val('cdTime') }, type);
+    const usual = how.why === 'tag' ? how.place : '';
+    if (!box.dataset.picked) box.value = how.place || 'either';
     chips.innerHTML = YDRemind.PLACES.map(p => {
       const on = p.id === box.value;
       return '<button type="button" class="cal-tagpick-b cal-placepick-b' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
         ' onclick="cardPlacePick(\'' + p.id + '\')">' + esc((p.icon ? p.icon + ' ' : '') + p.name) + '</button>';
     }).join('');
     const t = usual && !box.dataset.picked ? YDRemind.typeById(type) : null;
-    if (note) note.textContent = t ? 'Goes by what it is, ' + cardTypeLabel(t) + ', until you tap one.' : '';
+    if (note) note.textContent = box.dataset.picked ? ''
+      : t ? 'Goes by what it is, ' + cardTypeLabel(t) + ', until you tap one.'
+      : how.why === 'meeting' ? 'A meeting not marked virtual is out, until you tap one.'
+      : how.why === 'words' ? 'Worked out from what it says, until you tap one.' : '';
   }
   // With no kind picked, a new card's title says what it is ("Call Pat"):
   // the place follows it as it is typed, until one is tapped.
-  window.cardPlaceFollow = function () { if (!val('cdType')) drawCardPlace(); };
+  // The place follows what the card says until one is tapped (drawCardPlace):
+  // its kind, its title, its time and its notes all count.
+  window.cardPlaceFollow = function () { drawCardPlace(); };
   window.cardPlacePick = function (id) {
     const box = el('cdPlace');
     if (!box || !YDRemind.place(id)) return;

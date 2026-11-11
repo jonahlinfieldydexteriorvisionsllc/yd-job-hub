@@ -1947,7 +1947,7 @@
         ' onchange="calAllDayChanged()"> Any time that day — no set time</label>' +
       '<div class="grid g2" id="evTimes"' + (allDay ? ' hidden' : '') + '>' +
         '<div class="field"><span class="label">Starts</span>' +
-          '<input type="time" id="evTime" value="' + esc(startT) + '" data-was="' + esc(startT) + '" onchange="calStartMoved(); calRemindHint()"></div>' +
+          '<input type="time" id="evTime" value="' + esc(startT) + '" data-was="' + esc(startT) + '" onchange="calStartMoved(); calRemindHint(); calPlaceFollow()"></div>' +
         '<div class="field"><span class="label">Ends</span>' +
           '<input type="time" id="evEndTime" value="' + esc(endT) + '"></div>' +
       '</div>' +
@@ -2004,9 +2004,9 @@
         '<div class="hint" id="evShareHint"></div>' +
       '</div>' +
       '<div class="field"><span class="label">Address</span>' +
-        '<input id="evAddr" data-addr="line" autocomplete="off" value="' + esc(ev.address || '') + '" placeholder="Filled in from the job, or type one"></div>' +
+        '<input id="evAddr" data-addr="line" autocomplete="off" value="' + esc(ev.address || '') + '" placeholder="Filled in from the job, or type one" onchange="calPlaceFollow()"></div>' +
       '<div class="field"><span class="label">Notes</span>' +
-        '<textarea id="evNotes" rows="3" placeholder="What to bring, gate code, who to ask for">' + esc(ev.notes || '') + '</textarea></div>' +
+        '<textarea id="evNotes" rows="3" placeholder="What to bring, gate code, who to ask for" onchange="calPlaceFollow()">' + esc(ev.notes || '') + '</textarea></div>' +
       '<div class="field-actions" id="evActions">' + editorActions() + '</div>' +
       '</div><aside class="ev-day" id="evDay" aria-label="That day on the calendars"></aside></div>');
     const box = el('calModal') && el('calModal').querySelector('.modal');
@@ -2088,15 +2088,23 @@
     if (!box || !chips || !cal) return;
     if (field) field.hidden = cal.kind === 'jobs' || cal.kind === 'crew';
     const type = val('evType') || typeOfEv({ title: val('evTitle') }, cal);
-    const usual = YDRemind.usualPlace(type, cal);
-    if (!box.dataset.picked) box.value = usual || 'either';
+    // What Home will do with it until a place is tapped (remind.js
+    // placeWhy): its tag's usual place, else what its words say.
+    const allDay = el('evAllDay') && el('evAllDay').checked;
+    const how = YDRemind.placeWhy({ title: val('evTitle'), notes: val('evNotes'), address: val('evAddr'),
+      allDay: allDay, time: allDay ? '' : val('evTime') }, type, cal);
+    const usual = how.why === 'tag' ? how.place : '';
+    if (!box.dataset.picked) box.value = how.place || 'either';
     chips.innerHTML = YDRemind.PLACES.map(p => {
       const on = p.id === box.value;
       return '<button type="button" class="cal-tagpick-b cal-placepick-b' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
         ' onclick="calPlacePick(\'' + p.id + '\')">' + esc((p.icon ? p.icon + ' ' : '') + p.name) + '</button>';
     }).join('');
     const tag = usual && !box.dataset.picked ? YDRemind.tagOf(type, cal) : null;
-    if (note) note.textContent = tag ? 'Goes by its tag, ' + (tag.icon ? tag.icon + ' ' : '') + tag.name + ', until you tap one.' : '';
+    if (note) note.textContent = box.dataset.picked ? ''
+      : tag ? 'Goes by its tag, ' + (tag.icon ? tag.icon + ' ' : '') + tag.name + ', until you tap one.'
+      : how.why === 'meeting' ? 'A meeting not marked virtual is out, until you tap one.'
+      : how.why === 'words' ? 'Worked out from what it says, until you tap one.' : '';
   }
   // Jonah (22 Oct 2026): "when adding something on pc to the calendar have
   // the that days schedule and all tasks me and the crew have for that day
@@ -2160,6 +2168,7 @@
     if (t) t.hidden = el('evAllDay').checked;
     calRemindHint();
     calTypeNote();
+    calPlaceFollow();
   };
   // Picking what it is never touches the time: only the "Any time that
   // day" box does -- nor, now each calendar has its own tags, the calendar:
@@ -2187,7 +2196,14 @@
   // typeOf: "Pickup mulch" a material pickup, "Send the bid" an email to send, "Call
   // Pat back" a phone call; on the Crew schedule "Fix the trailer lights"
   // an equipment repair).
+  // The place buttons follow what the entry says until one is tapped
+  // (drawPlacePick): its title, time, address and notes all count.
+  window.calPlaceFollow = function () {
+    const c = document.querySelector('input[name="evCal"]:checked');
+    if (c && cals[c.value]) drawPlacePick(cals[c.value]);
+  };
   window.calTitleChanged = function () {
+    calPlaceFollow();
     const box = el('evType');
     const c = document.querySelector('input[name="evCal"]:checked');
     if (!box || box.dataset.picked || !c) return;

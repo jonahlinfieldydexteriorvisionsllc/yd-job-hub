@@ -176,12 +176,87 @@
     return (t && USUAL_PLACES.indexOf(t.place) !== -1 && t.place) || '';
   }
   // Where a thing is done: 'office', 'out' or '' (either) -- picked on it,
-  // else its tag's usual place.
+  // else its tag's usual place, else what its own words say (placeWhy).
   function placeOf(item, type, cal) {
+    return placeWhy(item, type, cal).place;
+  }
+
+  // Where a thing is done, and how that was decided: `why` is 'picked' (he
+  // tapped a place on it, Either included), 'tag' (its tag's usual place),
+  // 'words' (what it says), 'meeting' (a meeting in person) or '' (nothing
+  // says: either place).
+  //
+  // The words are Jonah's own rule for the ones with no place (10 Nov 2026,
+  // when 7 of his 13 to-dos landed under "Either place"): "if they are
+  // something i need a computer for they are in. if they are meetings not
+  // marked as virtual they are out, if they are pickups etc they are out."
+  // Read in this order, the first that fits deciding:
+  //   1. a meeting marked virtual (Zoom, Teams... in its title, notes or
+  //      place) is in, and so is a call or a text the title starts with or
+  //      returns ("Call Bob about pavers", "Return Pat's call"): they need a
+  //      phone or a computer, not a drive. "Measure Pat's yard, text him
+  //      when there" is a visit, and so is "call Mike when you get there"
+  //      in a visit's notes;
+  //   2. going somewhere to do it -- a pickup, a drop-off, a return, a site
+  //      visit, measuring -- is out;
+  //   3. computer work -- email, QuickBooks, a website, an account, sending,
+  //      paying, ordering, writing, confirming or cancelling -- is in, even
+  //      when it names a store ("Pay Menards bill", "Order pavers from MDS");
+  //   4. a store with nothing to do at a computer ("Price check at Menards")
+  //      is out;
+  //   5. a meeting -- at a set time, called a meeting or an appointment, or
+  //      tagged one -- is out, since not marked virtual (1 took those). The
+  //      editor's own 7:00-8:00 a new entry starts on is no set time here:
+  //      most entries keep it without meaning it ("Fix mower" left at 7:00
+  //      is not a meeting);
+  //   6. writing a quote or a bid, a review, scheduling is in (at a set time
+  //      it is a visit, and 5 took it);
+  //   7. other signs of being out (the truck or the car, buying, the bank,
+  //      a delivery, photos, installing, lunch) are out, and so is anything
+  //      with an address of its own;
+  //   8. else either place, as before.
+  // A place he picked always wins, and so does a tag's usual place (an email
+  // is office, a pickup is out, whatever its words). Never saved: worked out
+  // each time, so a better title moves it, and tapping a place keeps it.
+  // functions/reminders.py _place_why: the same, word for word -- KEEP THEM
+  // THE SAME (its patterns are ASCII-only, as these are).
+  const PLACE_VIRTUAL = /\b(virtual(ly)?|zoom|google meet|meet\.google|microsoft teams|ms teams|teams (call|meeting)|video (call|chat|meeting)|facetime|webinar|online (call|meeting))\b/i;
+  const PLACE_CALL = /^[^a-z0-9]*(calls?|calling|call ?back|phone ?calls?|texts?|texting)\b|\breturn(ed|ing)?\s+([^\s]+\s+)?(calls?|texts?)\b/i;
+  const PLACE_GOING = /\b(pick(ing)?[ -]?ups?|picked up|drop(ping)?[ -]?offs?|dropped off|return(ing)?\b(?!\s+([^\s]+\s+)?(call|email|e-mail|text|message)s?\b)|measure|measuring|site visit|walk[ -]?through|on[ -]?site)\b/i;
+  const PLACE_COMPUTER = /\b(e-?mails?|inbox|gmail|quickbooks|qbo|qb|invoices?|invoicing|websites?|domain|online|instagram|facebook|nextdoor|google|yelp|pinterest|accounts?|log ?in|sign ?up|fill (out|in)|docusign|e-?sign|pdf|print|scan|upload|download|spreadsheet|excel|research|look up|amazon|order(s|ed|ing)?|job hub|claude|computer|laptop|tax(es)?|1099|w-?9|payroll|bookkeep(er|ing)?|pay(?! attention)|paid|payments?|statements?|reconcil\w*|receipts?|send|reply|delete|write|writing|type up|reschedule|confirm|cancel|book|prep|prepare)\b/i;
+  const PLACE_STORE = /\b(menards|home depot|mds|siteone|site one|walgreens|costco|walmart|target|fleet farm|farm (and|&) fleet|tractor supply|o'?reilly|autozone|sunbelt|post office|ups store|fedex|dmv)\b/i;
+  const PLACE_MEETING = /\b(meet(ing|ings)?|appointment|appt|consult(ation)?|interview)\b/i;
+  const PLACE_DESK = /\b(estimates?|proposals?|quotes?|bids?|reviews?|schedule|scheduling|accountant)\b/i;
+  const PLACE_AWAY = /\b(tarps?|truck|trailer|camry|car|buy|grab|gas|fuel|bank|store|errands?|deliver(y|ies)?|pictures|photos|install|look at|stop by|stop at|swing by|visit|dentist|doctor|haircut|vet|gym|lunch|dinner|breakfast|coffee)\b/i;
+  // A set time he gave it, not the editor's 7:00-8:00 a new entry starts on.
+  function setTime(item) {
+    if (item.dueTime) return true;
+    if (item.allDay || !item.time) return false;
+    return !(item.time === '07:00' && (!item.endTime || item.endTime === '08:00'));
+  }
+  function placeWhy(item, type, cal) {
     const own = item && item.place;
-    if (own === 'office' || own === 'out') return own;
-    if (own === 'either') return '';
-    return usualPlace(type, cal);
+    if (own === 'office' || own === 'out') return { place: own, why: 'picked' };
+    if (own === 'either') return { place: '', why: 'picked' };
+    const usual = usualPlace(type, cal);
+    if (usual) return { place: usual, why: 'tag' };
+    if (!item) return { place: '', why: '' };
+    // Every kind of space read as a plain one (a phone's non-breaking space
+    // included), the same characters as the server's.
+    const plain = w => w.replace(/[\s\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/g, ' ');
+    const title = typeof item.title === 'string' ? plain(item.title) : '';
+    const more = plain([title, item.notes, item.address].filter(w => typeof w === 'string').join(' '));
+    if (PLACE_VIRTUAL.test(more) || PLACE_CALL.test(title)) return { place: 'office', why: 'words' };
+    if (PLACE_GOING.test(title)) return { place: 'out', why: 'words' };
+    if (PLACE_COMPUTER.test(title)) return { place: 'office', why: 'words' };
+    if (PLACE_STORE.test(title)) return { place: 'out', why: 'words' };
+    const t = cal ? tagOf(type, cal) : typeById(type);
+    if (setTime(item) || PLACE_MEETING.test(title) || (t && t.appointment && t.id !== 'personal'))
+      return { place: 'out', why: 'meeting' };
+    if (PLACE_DESK.test(title)) return { place: 'office', why: 'words' };
+    if (PLACE_AWAY.test(title) || (typeof item.address === 'string' && item.address.trim()))
+      return { place: 'out', why: 'words' };
+    return { place: '', why: '' };
   }
   // What an entry is when nothing better is known, on each kind.
   const FALLBACK = { work: 'todo', custom: 'todo', crew: 'crew', jobs: 'jobday', personal: 'personal' };
@@ -715,6 +790,7 @@
     PLACES: PLACES,
     place: id => PLACES.find(p => p.id === id) || null,
     placeOf: placeOf,
+    placeWhy: placeWhy,
     usualPlace: usualPlace,
     tagsOf: tagsOf,
     tagOf: tagOf,

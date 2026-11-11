@@ -898,14 +898,86 @@ def _tag_of(kind, cal):
 
 def _place_of(item, kind, cal=None):
     """Where a thing is done -- 'office', 'out' or '' (either): picked on it,
-    else its tag's usual place on its calendar (remind.js placeOf)."""
+    else its tag's usual place on its calendar, else what its own words say
+    (remind.js placeOf)."""
+    return _place_why(item, kind, cal)[0]
+
+
+# Jonah's rule for a thing with no place picked and a tag with no usual one
+# (10 Nov 2026): "if they are something i need a computer for they are in. if
+# they are meetings not marked as virtual they are out, if they are pickups
+# etc they are out." remind.js placeWhy explains the order -- KEEP THE WORDS
+# AND THE ORDER THE SAME on both sides. ASCII-only (re.A), as JavaScript's
+# \b and case-matching are, so an accented name reads the same on both.
+_PLACE_FLAGS = re.I | re.A
+_PLACE_SPACES = re.compile("[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+")
+PLACE_VIRTUAL = re.compile(r"\b(virtual(ly)?|zoom|google meet|meet\.google|microsoft teams|ms teams|teams (call|meeting)|"
+                           r"video (call|chat|meeting)|facetime|webinar|online (call|meeting))\b", _PLACE_FLAGS)
+PLACE_CALL = re.compile(r"^[^a-z0-9]*(calls?|calling|call ?back|phone ?calls?|texts?|texting)\b|"
+                        r"\breturn(ed|ing)?\s+([^\s]+\s+)?(calls?|texts?)\b", _PLACE_FLAGS)
+PLACE_GOING = re.compile(r"\b(pick(ing)?[ -]?ups?|picked up|drop(ping)?[ -]?offs?|dropped off|"
+                         r"return(ing)?\b(?!\s+([^\s]+\s+)?(call|email|e-mail|text|message)s?\b)|"
+                         r"measure|measuring|site visit|walk[ -]?through|on[ -]?site)\b", _PLACE_FLAGS)
+PLACE_COMPUTER = re.compile(r"\b(e-?mails?|inbox|gmail|quickbooks|qbo|qb|invoices?|invoicing|websites?|domain|online|"
+                            r"instagram|facebook|nextdoor|google|yelp|pinterest|accounts?|log ?in|sign ?up|fill (out|in)|"
+                            r"docusign|e-?sign|pdf|print|scan|upload|download|spreadsheet|excel|research|look up|amazon|"
+                            r"order(s|ed|ing)?|job hub|claude|computer|laptop|tax(es)?|1099|w-?9|payroll|"
+                            r"bookkeep(er|ing)?|pay(?! attention)|paid|payments?|statements?|reconcil\w*|receipts?|send|"
+                            r"reply|delete|write|writing|type up|reschedule|confirm|cancel|book|prep|prepare)\b",
+                            _PLACE_FLAGS)
+PLACE_STORE = re.compile(r"\b(menards|home depot|mds|siteone|site one|walgreens|costco|walmart|target|fleet farm|"
+                         r"farm (and|&) fleet|tractor supply|o'?reilly|autozone|sunbelt|post office|ups store|fedex|"
+                         r"dmv)\b", _PLACE_FLAGS)
+PLACE_MEETING = re.compile(r"\b(meet(ing|ings)?|appointment|appt|consult(ation)?|interview)\b", _PLACE_FLAGS)
+PLACE_DESK = re.compile(r"\b(estimates?|proposals?|quotes?|bids?|reviews?|schedule|scheduling|accountant)\b",
+                        _PLACE_FLAGS)
+PLACE_AWAY = re.compile(r"\b(tarps?|truck|trailer|camry|car|buy|grab|gas|fuel|bank|store|errands?|deliver(y|ies)?|"
+                        r"pictures|photos|install|look at|stop by|stop at|swing by|visit|dentist|doctor|haircut|vet|"
+                        r"gym|lunch|dinner|breakfast|coffee)\b", _PLACE_FLAGS)
+
+
+def _set_time(item):
+    """A set time he gave it, not the editor's 7:00-8:00 a new entry starts
+    on (remind.js setTime)."""
+    if item.get("dueTime"):
+        return True
+    if item.get("allDay") or not item.get("time"):
+        return False
+    return not (item.get("time") == "07:00" and (not item.get("endTime") or item.get("endTime") == "08:00"))
+
+
+def _place_why(item, kind, cal=None):
+    """(place, why): why is 'picked', 'tag', 'words', 'meeting' or ''
+    (remind.js placeWhy)."""
     own = item.get("place")
     if own in PLACES:
-        return own
+        return own, "picked"
     if own == "either":
-        return ""
-    place = (_tag_of(kind, cal) or {}).get("place")
-    return place if place in PLACES else ""
+        return "", "picked"
+    tag = _tag_of(kind, cal) or {}
+    if tag.get("place") in PLACES:
+        return tag["place"], "tag"
+    # Every kind of space read as a plain one, the same characters as the
+    # app's (JavaScript's \s).
+    title = _PLACE_SPACES.sub(" ", item.get("title")) if isinstance(item.get("title"), str) else ""
+    more = _PLACE_SPACES.sub(" ", " ".join(w for w in (title, item.get("notes"), item.get("address"))
+                                           if isinstance(w, str)))
+    if PLACE_VIRTUAL.search(more) or PLACE_CALL.search(title):
+        return "office", "words"
+    if PLACE_GOING.search(title):
+        return "out", "words"
+    if PLACE_COMPUTER.search(title):
+        return "office", "words"
+    if PLACE_STORE.search(title):
+        return "out", "words"
+    if _set_time(item) or PLACE_MEETING.search(title) or (tag.get("appointment") and tag.get("id") != "personal"):
+        return "out", "meeting"
+    if PLACE_DESK.search(title):
+        return "office", "words"
+    address = item.get("address")
+    if PLACE_AWAY.search(title) or (isinstance(address, str) and address.strip()):
+        return "out", "words"
+    return "", ""
 
 
 def _type_of(item, cal_kind=None, board_id=None, cal=None, board=None):
