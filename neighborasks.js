@@ -27,9 +27,11 @@
     drainage: 'Drainage', cleanup: 'Yard cleanup', mulch: 'Mulch or rock', edging: 'Edging', lawn: 'Lawn care',
     turf: 'Artificial turf', gutters: 'Gutters', other: 'Yard work',
   };
-  // Four days on, the neighbor has most likely found someone: folded away,
-  // not gone. The finder never hands in one older than this either (add).
-  const STALE_DAYS = 4;
+  // A week on, a post has had its views: folded away, not gone. The finder
+  // never hands in one older than this either (add). Jonah (10 Nov 2026):
+  // "reply to as many as i can daily ... more people seeing my name" -- an
+  // older recommendation thread is still read by neighbors, so a week.
+  const STALE_DAYS = 7;
   // The routine's own word on how its last run went (settings/postFinder),
   // said on the tab and Home when a run failed or none has come for this
   // long. It runs twice a day, so a whole missed day shows.
