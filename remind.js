@@ -73,11 +73,12 @@
     // now, everywhere; the id stays 'pickup', so every entry and card
     // already tagged keeps its tag.
     // And (10 Nov 2026): "all material pickups should be marked as crew
-    // tasks visible by the whole crew and [the crew lead]." So it is the crew's
-    // (`crew`) wherever it is: with nobody on it, every crew member's
-    // (the crew lead is ticked as crew), and with someone on it, theirs while the
-    // rest of the crew still see it. On a calendar it lives on the Crew
-    // schedule (CREW_SCHEDULE_TAGS), and a card carries 👷 Crew (boards.js
+    // tasks visible by the whole crew and [the crew lead]", then of the other
+    // four below, "Yes, all pickups". So every pickup is the crew's (`crew`)
+    // wherever it is: with nobody on it, every crew member's (the crew lead
+    // is ticked as crew), and with someone on it, theirs while the rest of
+    // the crew still see it. On a calendar it lives on the Crew schedule
+    // (CREW_SCHEDULE_TAGS), and a card carries 👷 Crew (boards.js
     // crewPickupPatch), so the crew can see and tick every one.
     { id: 'pickup', icon: '🧱', name: 'Material pickup', timed: false, color: '#8b5a2b', place: 'out', crew: true },
     // And then (22 Oct): "pickups are a thing we do often. So there should
@@ -89,10 +90,10 @@
     // tag's and the urgency colours (ΔE ≥ 15 from all of them; deep rust,
     // salmon, kraft tan, dark olive brown); dark writing on the two light
     // ones.
-    { id: 'rental', icon: '🔑', name: 'Rental pickup', timed: false, color: '#702018', place: 'out' },
-    { id: 'parts', icon: '⚙️', name: 'Parts pickup', timed: false, color: '#f09888', ink: '#3a1a10', place: 'out' },
-    { id: 'check', icon: '💵', name: 'Check pickup', timed: false, color: '#c8a880', ink: '#2b1d0e', place: 'out' },
-    { id: 'equipment', icon: '🚜', name: 'Equipment pickup', timed: false, color: '#504028', place: 'out' },
+    { id: 'rental', icon: '🔑', name: 'Rental pickup', timed: false, color: '#702018', place: 'out', crew: true },
+    { id: 'parts', icon: '⚙️', name: 'Parts pickup', timed: false, color: '#f09888', ink: '#3a1a10', place: 'out', crew: true },
+    { id: 'check', icon: '💵', name: 'Check pickup', timed: false, color: '#c8a880', ink: '#2b1d0e', place: 'out', crew: true },
+    { id: 'equipment', icon: '🚜', name: 'Equipment pickup', timed: false, color: '#504028', place: 'out', crew: true },
     { id: 'delivery', icon: '🚚', name: 'Delivery', timed: false, color: '#2a3d8f' },
     { id: 'email', icon: '📧', name: 'Email to send', timed: false, color: '#13a7c4', ink: '#04313b', place: 'office' },
     { id: 'todo', icon: '✅', name: 'To do that day', timed: false, color: '#8ab81e', ink: '#1d2600' },
@@ -158,9 +159,9 @@
   // there as the tag is picked, and the owner's device moves any found
   // elsewhere (calendar.js) -- and on a board, 👷 Crew on the card, so
   // every crew member can read it from any board that is not private
-  // (boards.js crewPickupPatch). Only the material pickup: the rental,
-  // parts, check and equipment pickups are as they were.
-  const CREW_SCHEDULE_TAGS = ['pickup'];
+  // (boards.js crewPickupPatch). And then every pickup (his "Yes, all
+  // pickups", the same evening): rental, parts, check and equipment too.
+  const CREW_SCHEDULE_TAGS = PICKUPS;
   const alwaysCrew = id => CREW_SCHEDULE_TAGS.indexOf(id) !== -1;
   // Whether an entry of this tag belongs on the Crew schedule rather than
   // the calendar it is on (the Job schedule has job days only).
@@ -744,7 +745,12 @@
     if (unclaimedPickup(card, board)) return !!who.crew;
     const on = (card.assignees || []).map(a => a && a.uid).filter(Boolean);
     const maker = who.makerOf ? who.makerOf(card.createdBy) : '';
-    return isMine(on, typeOf(card, { board: board }), maker, who);
+    // On a private board nothing is the crew's: they can never see it. A
+    // card there still typed a crew kind (a pickup moved onto it from
+    // another board) is whoever made it's, not every crew member's, or it
+    // would be nobody's. functions/reminders.py _whose_card: the same.
+    const type = typeOf(card, { board: board });
+    return isMine(on, isPrivate(board) && (typeById(type) || {}).crew ? '' : type, maker, who);
   }
   // A calendar entry keeps the uid of whoever made it (from 12 Oct 2026; the
   // ones before are the owner's).
@@ -815,7 +821,7 @@
     startIds: kind => startList(kind).map(x => x[0]),
     // Every kind of pickup (22 Oct 2026): one with no date is ready now.
     isPickup: id => PICKUPS.indexOf(id) !== -1,
-    // Always a crew task (10 Nov 2026: the material pickup), and whether an
+    // Always a crew task (10 Nov 2026: every kind of pickup), and whether an
     // entry of that tag belongs on the Crew schedule instead of its calendar.
     alwaysCrew: alwaysCrew,
     toCrewSchedule: toCrewSchedule,

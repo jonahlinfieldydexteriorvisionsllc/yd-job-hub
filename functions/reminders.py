@@ -689,11 +689,11 @@ TYPE_LEADS = {"bid": (60, 30)}
 TYPES = {"bid": "📝", "appt": "🕑", "phone": "📲", "pickup": "🧱", "rental": "🔑", "parts": "⚙️", "check": "💵",
          "equipment": "🚜", "delivery": "🚚", "email": "📧", "todo": "✅", "repair": "🔧", "shop": "🏚️",
          "errand": "🧾", "crew": "👷", "jobday": "🔨", "doctor": "💊", "personal": "🙋"}
-# The built-ins that are the crew's wherever they are (remind.js `crew`). The
-# material pickup too (Jonah, 10 Nov 2026: "all material pickups should be
-# marked as crew tasks visible by the whole crew and [the crew lead]"): with nobody on
-# it, every crew member's, on any calendar or board.
-CREW_TYPES = {"crew", "repair", "shop", "errand", "pickup"}
+# The built-ins that are the crew's wherever they are (remind.js `crew`). Every
+# kind of pickup too (Jonah, 10 Nov 2026: "all material pickups should be
+# marked as crew tasks visible by the whole crew and [the crew lead]", then "Yes,
+# all pickups"): with nobody on it, every crew member's, on any calendar or board.
+CREW_TYPES = {"crew", "repair", "shop", "errand", "pickup", "rental", "parts", "check", "equipment"}
 # Every kind of pickup (Jonah, 22 Oct 2026: "material, rental, parts, check,
 # and equipment (as in our equipment)"): one with no date is ready now
 # (remind.js PICKUPS).
@@ -1069,6 +1069,18 @@ def _unclaimed_pickup(k, board_id, kind):
     return not any(isinstance(a, dict) and a.get("uid") for a in k.get("assignees") or [])
 
 
+def _whose_card(k, board_id, board, kind):
+    """The kind a card's owner is worked out by (_is_mine): an unclaimed store
+    pickup is the crew's; on a private board nothing is the crew's -- they can
+    never see it -- so a card there still typed a crew kind (a pickup moved onto
+    it) is its maker's (remind.js cardIsMine: the same)."""
+    if _unclaimed_pickup(k, board_id, kind):
+        return "crew"
+    if (board or {}).get("ownerOnly") is True and kind in CREW_TYPES:
+        return ""
+    return kind
+
+
 # ------------------------------------------------- tasks not ticked off
 #
 # Jonah (14 Oct 2026): "make tasks on the calendar have to be marked done or
@@ -1258,7 +1270,7 @@ def open_tasks(db, people, first, last, now):
                             "recurring": bool(k.get("recurring")), "undated": bool(k.get("_undated")), "machine": False,
                             "place": _place_of(k, kind)},
                      {a.get("uid") for a in on if isinstance(a, dict)},
-                     "crew" if _unclaimed_pickup(k, b.id, kind) else kind,
+                     _whose_card(k, b.id, board, kind),
                      by_name.get(str(k.get("createdBy") or "").strip().lower(), ""))
     except Exception as err:          # noqa: BLE001
         print("tasks: cards not read:", err)
@@ -1413,7 +1425,7 @@ def _usual(db, people, since, now, cals, boards, prefs):
                 kind = _type_of(k, board_id=board_id, board=board)
                 on = {a.get("uid") for a in (k.get("assignees") or []) if isinstance(a, dict)}
                 maker = by_name.get(str(k.get("createdBy") or "").strip().lower(), "")
-                who = [u for u in sees if _is_mine(on, "crew" if _unclaimed_pickup(k, board_id, kind) else kind, maker, u)]
+                who = [u for u in sees if _is_mine(on, _whose_card(k, board_id, board, kind), maker, u)]
                 title = str(k.get("title") or "A card")
                 t = str(k.get("dueTime") or "")
                 if len(t) == 5 and t[2] == ":":

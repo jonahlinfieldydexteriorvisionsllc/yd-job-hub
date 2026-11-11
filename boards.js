@@ -1014,17 +1014,19 @@
   // hold 'crew'.
   const CREW_LABEL = { id: 'crew', name: '👷 Crew', color: '#c9922f' };
   const isCrewCard = k => (k.labels || []).indexOf(CREW_LABEL.id) !== -1;
-  // A material pickup is always a crew task (Jonah, 10 Nov 2026: "all
-  // material pickups should be marked as crew tasks visible by the whole
-  // crew and [the crew lead]"; remind.js alwaysCrew). Its tag makes it the crew's;
+  // A pickup is always a crew task (Jonah, 10 Nov 2026: "all material
+  // pickups should be marked as crew tasks visible by the whole crew and
+  // [the crew lead]", then "Yes, all pickups"; remind.js alwaysCrew). Its tag makes it the crew's;
   // what lets every crew member READ it from a board they are not on is 👷
   // Crew on the card (firestore.rules), so a card that reads as one -- its
   // kind picked, a card on Pickups, or a title saying "pick up" -- gets it,
   // and keeps its kind written down so the label does not make it a plain
   // crew task. Not on a private board: the crew never see one (it offers no
-  // material pickup). The fields to write, or null when nothing is needed.
+  // pickup). Nor a card Job Hub keeps up itself (`auto`: a machine's card on
+  // Maintenance, whose labels Equipment rewrites; that board is the whole
+  // crew's anyway). The fields to write, or null when nothing is needed.
   function crewPickupPatch(board, k) {
-    if (!board || board.virtual || board.crewOnly || board.ownerOnly === true || !k || isCrewCard(k)) return null;
+    if (!board || board.virtual || board.crewOnly || board.ownerOnly === true || !k || k.auto === true || isCrewCard(k)) return null;
     const kind = cardType(board, k);
     if (!YDRemind.alwaysCrew || !YDRemind.alwaysCrew(kind)) return null;
     const patch = { labels: (k.labels || []).concat([CREW_LABEL.id]) };
@@ -1305,7 +1307,7 @@
       if (more.job && more.job.id) Object.assign(rec, { jobId: more.job.id, jobName: more.job.name, jobNum: more.job.num || null });
       if (more.people && more.people.length) rec.assignees = more.people.map(p => ({ uid: p.uid, name: p.name }));
     }
-    // A material pickup: 👷 Crew on it from the start (crewPickupPatch).
+    // A pickup: 👷 Crew on it from the start (crewPickupPatch).
     Object.assign(rec, crewPickupPatch(board, rec) || {});
     cards[boardId] = cards[boardId] || {};
     cards[boardId][id] = Object.assign({ id: id }, rec);
@@ -2586,8 +2588,8 @@
     // Not on a private board (the crew never see it), nor on one whose cards
     // are not things to go and do (no kinds: To buy, the wish list).
     const crewOk = board.ownerOnly !== true && (crewTask || YDRemind.boardKinds(board).length > 0);
-    // A material pickup is a crew task for good (10 Nov 2026): nothing to
-    // switch, either way.
+    // A pickup is a crew task for good (10 Nov 2026): nothing to switch,
+    // either way.
     const always = !!(type && YDRemind.alwaysCrew && YDRemind.alwaysCrew(type.id));
     const crewBtn = !editsBoard(board) || board.id === CREW_BOARD || !crewOk || always ? ''
       : '<button class="btn btn-sm" onclick="cardCrewTask(' + (crewTask ? 'false' : 'true') + ')">' +
@@ -3257,7 +3259,7 @@
       (!kinds.length && !crew.length ? '' :
       group(kinds.length ? 'What it is &amp; who is on it' : 'Who is on it',
         (kinds.length ? 'The kind gives the card its colour.' : '') +
-          (crewKind ? ' 👷 A crew task' + (pickupKind ? ' — every 🧱 material pickup is one —' : '') +
+          (crewKind ? ' 👷 A crew task' + (pickupKind ? ' — every pickup is one —' : '') +
             ' can be seen by every crew member, from any board that is not private.' : ''),
         // What it is gives the card its colour; whether it has a time is the
         // Time box's alone (Jonah, 15 Oct 2026).
@@ -3690,7 +3692,7 @@
       if (same('notes')) drop(['notes']);
       if (same('list')) drop(['checklist']);
     }
-    // A material pickup keeps 👷 Crew, whatever was ticked (crewPickupPatch):
+    // A pickup keeps 👷 Crew, whatever was ticked (crewPickupPatch):
     // read off the card as it will be once saved -- a new title saying
     // "pick up" makes it one too.
     Object.assign(rec, crewPickupPatch(board, Object.assign({}, was, rec)) || {});

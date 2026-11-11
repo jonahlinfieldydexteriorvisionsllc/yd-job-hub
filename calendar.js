@@ -2193,18 +2193,19 @@
     typeNote = why;
     calCalChanged(false);
   }
-  // Where an entry of this tag goes when it is put on `calId`: a material
-  // pickup on the Crew schedule, whatever calendar was picked (Jonah,
+  // Where an entry of this tag goes when it is put on `calId`: a pickup of
+  // any kind on the Crew schedule, whatever calendar was picked (Jonah,
   // 10 Nov 2026: "all material pickups should be marked as crew tasks
-  // visible by the whole crew and [the crew lead]" -- the crew only look at My work,
-  // so a pickup there was nobody's to tick; remind.js toCrewSchedule), when
-  // this person may add to it; anything else where it was put.
+  // visible by the whole crew and [the crew lead]", then "Yes, all pickups" -- the
+  // crew only look at My work, so a pickup there was nobody's to tick;
+  // remind.js toCrewSchedule), when this person may add to it; anything
+  // else where it was put.
   function homeFor(calId, type) {
     const crew = cals[CREW_CAL];
     return cals[calId] && YDRemind.toCrewSchedule(type, cals[calId]) && crew && editsCal(crew) ? CREW_CAL : calId;
   }
-  // In the editor: the tag (tapped, or following the title) says a material
-  // pickup on a calendar other than the Crew schedule -- ticked over to it,
+  // In the editor: the tag (tapped, or following the title) says a pickup
+  // on a calendar other than the Crew schedule -- ticked over to it,
   // with a word why under the tags. A calendar picked by hand after that
   // comes back to it the same way, since a save would put it there anyway.
   function pickupToCrew() {
@@ -2506,8 +2507,8 @@
     // The reminder: the usual one, none, or a set time (and who asked for it).
     const base = ed.eventId ? (events[ed.calId] || {})[ed.eventId] : null;
     Object.assign(rec, YDRemind.fromChoice(val('evRemind'), base, (me() || {}).uid));
-    // A material pickup goes on the Crew schedule, whichever calendar is
-    // ticked (homeFor; the editor has ticked it over already, saying why).
+    // A pickup goes on the Crew schedule, whichever calendar is ticked
+    // (homeFor; the editor has ticked it over already, saying why).
     return { rec: rec, calId: homeFor(calId, rec.type || typeOfEv({ title: title }, cals[calId])), base: base };
   }
 
@@ -3494,9 +3495,10 @@
     });
   }
 
-  // A material pickup on any calendar but the Crew schedule moves there,
+  // A pickup of any kind on any calendar but the Crew schedule moves there,
   // every date of it (Jonah, 10 Nov 2026: "all material pickups should be
-  // marked as crew tasks visible by the whole crew and [the crew lead]"): ones from
+  // marked as crew tasks visible by the whole crew and [the crew lead]", then "Yes,
+  // all pickups"): ones from
   // before, and any an older copy of the app puts on My work. Who is on it,
   // what was ticked off and everything else go with it. The owner's device
   // does it, as each calendar's entries come from the server, the way the
@@ -3536,7 +3538,7 @@
       }
     }
     if (moved.length) {
-      showToast('🧱 Material pickups are crew tasks — moved from ' + (cal.name || 'a calendar') + ' to the ' +
+      showToast('Pickups are crew tasks — moved from ' + (cal.name || 'a calendar') + ' to the ' +
         (cals[CREW_CAL].name || 'Crew schedule') + ': ' + moved.slice(0, 3).join(', ') + (moved.length > 3 ? ' and ' + (moved.length - 3) + ' more' : ''));
     }
   }
@@ -3942,7 +3944,7 @@
   // date, time, crew [{uid, name}], notes }. Its id, or '' when this person
   // may not add to that calendar.
   function addFromNote(calId, rec) {
-    // A material pickup on the Crew schedule, wherever the note was going
+    // A pickup on the Crew schedule, wherever the note was going
     // (homeFor): jot.js asks homeFor first, so its words and Undo agree.
     if (rec && rec.title && cals[calId]) calId = homeFor(calId, typeOfEv({ title: rec.title }, cals[calId]));
     const cal = cals[calId];
@@ -3965,7 +3967,7 @@
   }
   // Undo of the above: the entry, gone again (only one made that way).
   function dropFromNote(calId, id) {
-    // Made on the Crew schedule instead (a material pickup: addFromNote).
+    // Made on the Crew schedule instead (a pickup: addFromNote).
     if (!(events[calId] || {})[id] && (events[CREW_CAL] || {})[id]) calId = CREW_CAL;
     const ev = (events[calId] || {})[id];
     if (!ev || !ev.fromNote || !editsCal(cals[calId])) return false;
@@ -4010,9 +4012,8 @@
     // has none); a calendar, and whether this person may add to it.
     addFromNote: addFromNote,
     dropFromNote: dropFromNote,
-    // The calendar a note with these words really goes on (a material
-    // pickup: the Crew schedule, 10 Nov 2026), so jot.js says it and undoes
-    // it there.
+    // The calendar a note with these words really goes on (a pickup: the
+    // Crew schedule, 10 Nov 2026), so jot.js says it and undoes it there.
     homeFor: (calId, title) => cals[calId] ? homeFor(calId, typeOfEv({ title: title || '' }, cals[calId])) : calId,
     people: () => crewPeople(),
     cal: id => cals[id] || null,
