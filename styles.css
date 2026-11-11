@@ -2499,6 +2499,8 @@
 
   /* ---- Receipts to sort (receipts.js) ---- */
   .rc-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; font-size:13px; }
+  /* The last check that found receipts, and how many sorted themselves (receipts.js lastFoundHtml): a line of its own. */
+  .rc-lastfound { flex-basis:100%; }
   .rc-card { border:1px solid var(--border); border-radius:10px; background:var(--surface); padding:12px 14px; margin-bottom:12px; }
   .rc-top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .rc-vendor { font-weight:700; font-size:16px; }

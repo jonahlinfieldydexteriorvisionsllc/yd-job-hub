@@ -3178,6 +3178,7 @@ def _save_held(db, jobs_of, report, saved=None, pats=None):
         kept = _note_saved(db, dict(m, id=s.id), saves, report, receipt={"labelled": False, "rebate": rebate},
                            got=firestore.DELETE_FIELD)
         for rid, what, personal in kept:
+            _found(report, rid)
             if rebate:
                 _tag_rebate(db, rid)
             if personal:
@@ -3186,6 +3187,24 @@ def _save_held(db, jobs_of, report, saved=None, pats=None):
             if saved is not None:
                 saved.append(rid)
             report["added" if what == "added to" else "new"] += 1
+
+
+# Which receipts a run brought in, by id, on its report (Jonah, 10 Nov 2026:
+# "is the receipt puller auto sorting some receipts without my click? if so id
+# like it to say how many it auto sorted every time it does a pull"). Some file
+# themselves here (_file_personal, _file_place), some on the owner's device a
+# moment later (a delivery to a job's address, a subcontractor's bill), so the
+# app counts from the receipts themselves what sorted itself, and where
+# (receipts.js pullSorted), rather than this run guessing. The newest run that
+# brought any in is kept too (`lastFound`), so the Receipts tab still says it
+# after the half-hourly runs that find nothing.
+FOUND_MAX = 200
+
+
+def _found(report, rid):
+    ids = report.setdefault("ids", [])
+    if rid not in ids and len(ids) < FOUND_MAX:
+        ids.append(rid)
 
 
 # ------------------------------------------------------------ the year's pull
@@ -3489,9 +3508,11 @@ def run(client, manual=False):
     state = db.collection("settings").document("receipts")
     if not _claim(db):
         return {"busy": True}
+    # `ids` and `startedAt` always: lastReport is merged into the one before,
+    # so a key left out would keep the last run's (_found, above).
     report = {"looked": 0, "new": 0, "added": 0, "paychecks": 0, "personal": 0, "pickups": 0, "cards": 0,
               "notReceipts": 0, "waiting": 0, "errors": 0, "byCode": 0, "held": 0,
-              "zero": 0, "toPay": 0, "learned": 0}
+              "zero": 0, "toPay": 0, "learned": 0, "ids": [], "startedAt": dg._now().isoformat()}
     people = None      # user records, read only if a paycheck turns up
     needs_permission = False
     read_state = {}    # when this was the week's read: when, and whether it left any behind
@@ -3731,6 +3752,7 @@ def run(client, manual=False):
                     report["errors"] += 1
                     kept = [s for s in saves if s[1] not in (TO_PAY, NOT_RECEIPT)]
                 for rid, what, personal in kept:
+                    _found(report, rid)
                     if m["id"] in rebates:
                         _tag_rebate(db, rid)
                     if personal:
@@ -3785,6 +3807,10 @@ def run(client, manual=False):
         needs_permission = True
         return {"needsPermission": True}
     finally:
+        # The newest run that brought receipts in (_found): its three keys
+        # always written together, so none is left from an older one.
+        found = {"lastFound": {"at": report["startedAt"], "ids": list(report["ids"]), "manual": bool(manual)}} \
+            if report.get("ids") else {}
         state.set(dict({"runningSince": None, "lastRunAt": dg._now().isoformat(),
                         "lastReport": report, "needsPermission": needs_permission,
-                        "manual": bool(manual)}, **read_state), merge=True)
+                        "manual": bool(manual)}, **dict(read_state, **found)), merge=True)

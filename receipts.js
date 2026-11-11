@@ -1539,26 +1539,136 @@
     return data;
   }
 
+  // ------------------------------------------- what a check brought in
+  //
+  // Jonah, 10 Nov 2026: "is the receipt puller auto sorting some receipts
+  // without my click? if so id like it to say how many it auto sorted every
+  // time it does a pull." It does: a personal purchase, a store one of his
+  // Monthly bills places, rock salt, a flight, an accountant's bill file
+  // themselves on the server as they are read; a delivery to a job's own
+  // address and a subcontractor's bill go on by themselves on his device a
+  // moment later. Then To sort shows nothing and a check looks like it found
+  // nothing (9 Nov: "you missed stuff"). So each check says how many sorted
+  // themselves and where -- in its toast, and on the Receipts tab for the
+  // half-hourly checks nobody watches.
+  //
+  // Counted from the receipts themselves, by the ids the check names
+  // (functions/receipts.py _found): filed by Job Hub since that check began =
+  // sorted itself; one on its way to its job by itself (sentFor, auto ready:
+  // the next device of his that is open puts it on) counts too, said "on its
+  // way". The rest: still to sort, sorted by a person (by hand since, or
+  // before, when the email only added to it), or somewhere else (set aside,
+  // a bill to pay, filed by Job Hub on an earlier check).
+  const PULL_SKEW_MS = 3 * 60 * 1000;     // a device's clock a little behind the server's
+  function placeWord(s) {
+    const to = destOf(s), p = PLACE_LIST.find(x => x.id === to);
+    const icon = p ? p.chip.split(' ')[0] + ' ' : '';
+    if (to === 'job') return icon + (s.jobName || 'a job');
+    if (to === 'vehicle' || to === 'sub') return icon + (s.name || (p && p.name) || '');
+    return p ? p.chip : (s.name || '');
+  }
+  const goingByItself = r => {
+    const f = r.sentFor || {}, a = r.auto || {};
+    return toSortNow(r) && !!f.to && (a.state === 'ready' ||
+      (a.state === 'adding' && Date.now() - new Date(a.at || 0).getTime() <= STUCK_MS));
+  };
+  // What the rest are, in a few words each.
+  const PULL_ELSE = { topay: 'under 💸 Invoices to pay', aside: 'set aside', notreceipt: 'marked not a receipt',
+    filed: 'already filed by Job Hub' };
+  function pullSorted(ids, since) {
+    const from = Date.parse(since || '');
+    const out = { found: 0, itself: 0, toSort: 0, byYou: 0, others: [], places: [], missing: [] };
+    const tally = {}, order = [], other = {};
+    (Array.isArray(ids) ? ids : []).forEach(id => {
+      if (leaving[id]) return;
+      const r = receipts[id];
+      if (!r) { out.missing.push(id); return; }
+      out.found++;
+      const st = stageOf(r);
+      let where = null;
+      if (st.id === 'filed' && st.who === 'Job Hub' && !(Date.parse(st.at) < from - PULL_SKEW_MS)) {
+        where = (r.splits || []).map(placeWord);
+      } else if (goingByItself(r)) {
+        const f = r.sentFor;
+        where = [placeWord(f.to === 'job' ? { to: 'job', jobName: f.jobName } : { to: f.to, name: f.name }) + ' (on its way)'];
+      }
+      if (where) {
+        out.itself++;
+        where.filter((w, i) => w && where.indexOf(w) === i).forEach(w => {
+          if (!tally[w]) order.push(w);
+          tally[w] = (tally[w] || 0) + 1;
+        });
+      } else if (toSortNow(r)) out.toSort++;
+      else if (st.id === 'filed' && st.who !== 'Job Hub') out.byYou++;
+      else {
+        const w = PULL_ELSE[st.id] || 'done with';
+        other[w] = (other[w] || 0) + 1;
+      }
+    });
+    out.places = order.map(w => tally[w] > 1 ? w + ' ×' + tally[w] : w);
+    out.others = Object.keys(other).map(w => other[w] + ' ' + w);
+    return out;
+  }
+  // "3 receipts found · 2 sorted themselves (🗂 Office overhead, 📋 a job) ·
+  // 1 for you to sort", or '' when none of them is here any more.
+  function pullWords(p) {
+    if (!p.found) return '';
+    const n = p.found, them = k => k === 1 ? 'itself' : 'themselves';
+    const shown = p.places.slice(0, 3), more = p.places.length - shown.length;
+    return n + ' receipt' + (n === 1 ? '' : 's') + ' found · ' +
+      (p.itself ? p.itself + ' sorted ' + them(p.itself) +
+        (shown.length ? ' (' + shown.join(', ') + (more > 0 ? ', ' + more + ' more' : '') + ')' : '')
+        : 'none sorted ' + them(n)) +
+      (p.toSort ? ' · ' + p.toSort + ' for you to sort' : '') +
+      (p.byYou ? ' · ' + p.byYou + ' sorted by you' : '') +
+      p.others.map(w => ' · ' + w).join('');
+  }
+  // Right after a check, its receipts are still arriving here, and the ones
+  // this device puts on by itself (a job's delivery, a subcontractor's bill)
+  // are a moment behind them: waits for those, a few seconds at most.
+  async function pullSettled(ids) {
+    const end = Date.now() + 5000;
+    await new Promise(r => setTimeout(r, 1200));
+    pullSorted(ids).missing.forEach(readAgain);
+    for (;;) {
+      const busy = ids.some(id => !leaving[id] && (!receipts[id] || goingByItself(receipts[id])));
+      if (!busy || Date.now() >= end) break;
+      await new Promise(r => setTimeout(r, 400));
+    }
+  }
+
   window.rcCheckNow = async function () {
     if (checking) return;
     if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
     checking = true; redraw(true);
     try {
       const rep = (await ask('/receipts/now')).report || {};
-      if (rep.busy) showToast('Already checking — new receipts will appear here');
+      if (rep.busy) showToast('Already checking — what it finds, and how many sort themselves, will show here');
       else if (rep.needsPermission) showToast('Reading email is not switched on yet');
       else {
-        const found = (rep.new || 0) + (rep.added || 0);
-        showToast((found ? found + ' receipt' + (found === 1 ? '' : 's') + ' found'
+        // The receipts it found, and how many sorted themselves (above). A
+        // server from before ids were named: its own counts, as before.
+        let said = '', ids = Array.isArray(rep.ids) ? rep.ids : null;
+        if (ids && ids.length) {
+          await pullSettled(ids);
+          said = pullWords(pullSorted(ids, rep.startedAt));
+        }
+        const found = ids ? (said ? 1 : 0) : (rep.new || 0) + (rep.added || 0);
+        showToast((said ? said + (rep.waiting ? ' — ' + rep.waiting + ' more on the next check' : '')
+          : found ? found + ' receipt' + (found === 1 ? '' : 's') + ' found'
           + (rep.waiting ? ' — ' + rep.waiting + ' more on the next check' : '')
           : 'No new receipts' + (rep.waiting ? ' yet — ' + rep.waiting + ' waiting for the next check' : ''))
-          // Clearly a household's: kept, and filed under Personal by itself.
-          + (rep.personal ? ' · ' + rep.personal + ' personal, filed under 👤 Personal' : '')
+          // Clearly a household's: kept, and filed under Personal by itself
+          // (in "sorted themselves" when the receipts are counted).
+          + (rep.personal && !ids ? ' · ' + rep.personal + ' personal, filed under 👤 Personal' : '')
           // Bills not paid yet, kept apart; mail for nothing, or like what
           // was marked not a receipt, passed over.
           + (rep.toPay ? ' · ' + rep.toPay + ' bill' + (rep.toPay === 1 ? '' : 's') + ' not paid yet, under 💸 Invoices to pay' : '')
           + ((rep.zero || 0) + (rep.learned || 0) ? ' · ' + ((rep.zero || 0) + (rep.learned || 0)) + ' passed over ($0, or like ones marked not a receipt)' : '')
-          + (rep.byCode ? ' · ' + rep.byCode + ' sorted by the app, no Claude' : ''));
+          // Emails told from receipts by code: not filing, so not "sorted"
+          // beside the receipts that sorted themselves.
+          + (rep.byCode ? ' · ' + rep.byCode + ' email' + (rep.byCode === 1 ? '' : 's') + ' checked without Claude' : ''),
+          said ? 9000 : undefined);
       }
     } catch (e) {
       showToast('Could not check email: ' + e.message);
@@ -2398,7 +2508,19 @@
     const next = new Date(t.getTime() + every * 864e5);
     return '<span class="muted">' + (state.lastReadAt ? 'Receipts last read ' + esc(fmt(t)) +
       ' · next read about ' + esc(fmt(next)) + ' (pickup notices are read as they come in)'
-      : 'Email last checked ' + esc(fmt(t))) + '</span>';
+      : 'Email last checked ' + esc(fmt(t))) + '</span>' + lastFoundHtml(fmt);
+  }
+  // The newest check that brought receipts in, half-hourly or by hand, and
+  // how many of them sorted themselves (pullSorted). Worked out from the
+  // receipts as they are now, so one sorted since by hand reads as sorted
+  // before, not as waiting.
+  function lastFoundHtml(fmt) {
+    const f = state && state.lastFound;
+    if (!f || !Array.isArray(f.ids) || !f.ids.length) return '';
+    const t = new Date(f.at || '');
+    const words = pullWords(pullSorted(f.ids, f.at));
+    if (!words || isNaN(t)) return '';
+    return '<span class="muted rc-lastfound">Latest receipts in, ' + esc(fmt(t)) + ': ' + esc(words) + '</span>';
   }
 
   const byNewest = (a, b) => String(b.date || '').localeCompare(String(a.date || '')) ||
