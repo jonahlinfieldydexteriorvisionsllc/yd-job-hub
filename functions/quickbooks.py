@@ -2132,14 +2132,18 @@ def _sweep(news, deadline=None):
     # The payments step sends to QuickBooks only after the invoices list was
     # brought up to date this run (sync_payments `pushes`).
     invoices_read = []
+    weekly = []                         # the week's key, when this is the week's deposits run
 
     def invoices():
-        news.extend(sync_invoices(jobs) or [])
+        also = estimate_invoices(jobs, weekly)
+        news.extend(sync_invoices(jobs, also=also) or [])
         invoices_read.append(True)
 
     later = [
         ("invoices list not brought up to date", invoices),
         ("payments not brought in step", lambda: sync_payments(jobs, pushes=bool(invoices_read))),
+        ("payments on a job guessed by name not told",
+         lambda: counted("%d payment(s) on an invoice tied by name only, told", tell_guessed() if weekly else 0)),
         ("accepted estimates not brought in", lambda: news.extend(import_accepted(every) or [])),
         ("snow contracts not moved",
          lambda: counted("%d snow contract(s) put on the Snow route", snow_from_jobs(jobs))),
@@ -4618,10 +4622,178 @@ def _name_jobs(jobs, env):
     return {k: v[0] for k, v in seen.items() if len(v) == 1}
 
 
-def sync_invoices(jobs):
+# An invoice made from a job's own estimate is that job's invoice. Jonah turns
+# an accepted estimate into an invoice in QuickBooks to take the deposit (15
+# Oct 2026), and nothing gave the job that invoice: it was matched to the job
+# by the customer's name only, and a name match never brings a payment onto
+# the job (_sync_job_payments), so two jobs' deposits sat in QuickBooks and
+# not on their jobs (11 Nov 2026). Now the hourly look ties such an invoice to
+# the job for sure, and the job takes it, as one made with Make the invoice is.
+def _estimates_of(inv):
+    """The QuickBooks estimates an invoice was made from: named on the invoice
+    and on its lines (an estimate turned into an invoice says so in both)."""
+    ids = set()
+    for t in list(inv.get("LinkedTxn") or []) + [t for ln in _flat_lines(inv.get("Line"))
+                                                  for t in ln.get("LinkedTxn") or []]:
+        if (t or {}).get("TxnType") == "Estimate" and t.get("TxnId"):
+            ids.add(str(t["TxnId"]))
+    return ids
+
+
+def _estimate_jobs(jobs, env):
+    """QuickBooks estimate id -> the one job here holding it (qbEstimate). An
+    estimate two jobs hold (a duplicate not yet taken off) is neither's: that
+    would be a guess, and a guess never moves money."""
+    seen = {}
+    for jid, j in jobs.items():
+        q = j.get("qbEstimate") or {}
+        if q.get("id") and q.get("env") == env and not j.get("removeWhy") and not j.get("deletedAt"):
+            seen.setdefault(str(q["id"]), []).append(jid)
+    return {k: v[0] for k, v in seen.items() if len(v) == 1}
+
+
+def _held_invoice(j, env):
+    """The invoice id a job holds in this company ('' for none)."""
+    ref = j.get("qbInvoiceRef") or {}
+    return str(ref.get("id") or "") if ref.get("env") == env else ""
+
+
+def _from_estimate(inv, by_est, jobs, env):
+    """The job whose own estimate this invoice was made from, when that job
+    holds no other invoice (a second invoice from one estimate is left to be
+    picked by hand). None when it names no estimate a job here holds, or the
+    estimates it names are two jobs'."""
+    found = {by_est[e] for e in _estimates_of(inv) if e in by_est}
+    if len(found) != 1:
+        return None
+    jid = found.pop()
+    held = _held_invoice(jobs[jid], env)
+    return jid if not held or held == str(inv.get("Id")) else None
+
+
+def _snow_invoice(inv, ends):
+    """A storm's invoice -- snow, salt and labor lines only. Never a
+    landscaping job's, whatever the name on it: a snow customer with a job
+    here (a fall cleanup, say) would have every storm's bill guessed onto
+    that job by the name."""
+    return _snow_lines(inv, ends) is not None
+
+
+# Once a week (Jonah, 11 Nov 2026: "add weekly routine to connect deposits to
+# jobs"): the first sweep of each week from 7 am, Chicago -- Monday's, unless
+# none ran that day (sweeps run 7 am to 7 pm every day). The hourly look reads only
+# invoices with money owed, so one made from a job's estimate and paid in full
+# before a look saw it open would never reach the job; this asks QuickBooks
+# about every job with an accepted estimate and no invoice. Then a payment
+# still on an invoice tied to a job by the customer's name alone (never moved
+# onto the job) is told in one push, for him to say it is the right job.
+DEPOSIT_WEEK_HOUR = 7
+
+
+def _week_key(now):
+    """This week where the business is ('2026-W46'), and the hour there."""
+    try:
+        from zoneinfo import ZoneInfo
+        local = now.astimezone(ZoneInfo("America/Chicago"))
+    except Exception:                                   # noqa: BLE001 -- no time zone data: UTC is near enough
+        local = now
+    y, w, _ = local.isocalendar()
+    return "%d-W%02d" % (y, w), local.hour
+
+
+def estimate_invoices(jobs, ran=None, now=None):
+    """The week's run (see above): invoice ids for sync_invoices (`also`) --
+    each the one invoice made from the estimate of a job that holds none.
+    [] when it is not the week's run, or nothing was found. `ran` (a list)
+    is given the week's key when this is the run, so the push follows
+    (tell_guessed). Never raises but ReconnectNeeded: the hourly invoices
+    look must go on whatever this does."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        return []
+    try:
+        key, hour = _week_key(now or _now())
+        if hour < DEPOSIT_WEEK_HOUR:
+            return []
+        realm = (_load_tokens() or {}).get("realmId") or "none"
+        ref = _db().collection("integrations").document("quickbooksImport")
+        snap = ref.get()
+        state = (((snap.to_dict() or {}) if snap.exists else {}).get(realm)) or {}
+        if state.get("depositWeek") == key:
+            return []
+        ask = {e: jid for e, jid in _estimate_jobs(jobs, env).items()
+               if not _held_invoice(jobs[jid], env)
+               and str(jobs[jid].get("jobStatus") or "") in ("booked", "inprogress", "active", "complete")}
+        unasked = set()
+        out = []
+        for e in (_by_ids("Estimate", ask, unasked) if ask else {}).values():
+            invs = sorted({str(t.get("TxnId")) for t in e.get("LinkedTxn") or []
+                           if (t or {}).get("TxnType") == "Invoice" and t.get("TxnId")})
+            if len(invs) == 1:
+                out.append(invs[0])
+        # Marked only after every estimate was asked about: a question
+        # QuickBooks didn't answer leaves the week unmarked, so the next hour
+        # asks again (what was found now is still read now).
+        if not unasked:
+            ref.set({realm: {"depositWeek": key}}, merge=True)
+            if ran is not None:
+                ran.append(key)
+        return out
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks deposits: the week's look at estimates' invoices failed:", err)
+        return []
+
+
+def tell_guessed():
+    """The week's push: payments on invoices tied to a job by the customer's
+    name alone. Those are never moved onto the job (a repeat customer's old
+    invoice would take the new job's deposit), so they wait for him to say
+    it is the right job on Money -> Owed to you. Returns how many."""
+    db = _db()
+    rows = []
+    for s in db.collection("invoices").where("jobBy", "==", "name").stream():
+        d = s.to_dict() or {}
+        if d.get("deletedAt") or not d.get("jobId"):
+            continue
+        pays = [p for p in d.get("payments") or [] if _amount(p.get("amount")) > 0]
+        if not pays:
+            continue
+        # Already on the job -- logged there and tied to QuickBooks' payment
+        # (qbPaymentId) -- is no news, however the invoice was matched.
+        snap = db.collection("jobs").document(str(d["jobId"])).get()
+        on_job = {str(p.get("qbPaymentId")) for p in ((snap.to_dict() or {}) if snap.exists else {}).get("payments") or []
+                  if isinstance(p, dict) and p.get("qbPaymentId")}
+        if all(str(p.get("id")) in on_job for p in pays):
+            continue
+        paid = round(sum(_amount(p.get("amount")) for p in pays), 2)
+        rows.append((str(d.get("customerName") or "A customer"), paid, str(d.get("docNumber") or "")))
+    if not rows:
+        return 0
+    rows.sort(key=lambda r: -r[1])
+    said = ", ".join("%s %s%s" % (n, _money_text(p), " (#%s)" % d if d else "") for n, p, d in rows[:3])
+    if len(rows) > 3:
+        said += " and %d more" % (len(rows) - 3)
+    note = {"push": {"title": "💵 %d payment%s not on a job yet" % (len(rows), "" if len(rows) == 1 else "s"),
+                     "body": said + ". Matched to a job by name only, so not added to it. "
+                             "Tap ✓ Right job or pick the job in Money → Owed to you."}}
+    import digest as dg
+    for uid in [u.id for u in db.collection("users").where("role", "==", "owner").stream()]:
+        try:
+            dg.send_push(uid, note, tag="yd-deposits", ttl=20 * 3600, opens="invoices")
+        except Exception as err:                        # noqa: BLE001 -- the list still shows them
+            print("quickbooks deposits: push failed:", err)
+    return len(rows)
+
+
+def sync_invoices(jobs, also=None):
     """The invoices list brought up to date with QuickBooks. Returns news of
     payments on invoices no job here holds (a job's own invoice is told by the
-    sweep above, so a payment is never told twice)."""
+    sweep above, so a payment is never told twice). `also`: invoice ids to
+    read even though no money is owed on them and they are not on the list --
+    ones made from a job's estimate and paid off before a look saw them open
+    (estimate_invoices, the week's run)."""
     env = _env("QB_ENV", "sandbox")
     if env != "production":
         return []
@@ -4633,19 +4805,25 @@ def sync_invoices(jobs):
     by_inv = {str((j.get("qbInvoiceRef") or {}).get("id")): jid for jid, j in jobs.items()
               if (j.get("qbInvoiceRef") or {}).get("id") and (j.get("qbInvoiceRef") or {}).get("env") == env
               and not j.get("removeWhy")}
+    by_est = _estimate_jobs(jobs, env)
     by_name = _name_jobs(jobs, env)
+    ends = _end_names()
     news = []
     now_open = {str(i.get("Id")): i for i in _open_invoices()}
     # Open here, gone from the open list there: paid off (or deleted).
     gone = [i for i in have if i not in now_open]
+    extra = sorted({str(i) for i in also or [] if str(i or "").strip()} - set(now_open) - set(have))
     # Asked for by id: paid off, or deleted. One whose question failed is
     # neither -- it is left as it is until the next look, not marked deleted
     # (that would lose its paidAt, and its payments would never reach the job).
     unasked = set()
-    closed = _by_ids("Invoice", gone, unasked) if gone else {}
+    closed = _by_ids("Invoice", gone + extra, unasked) if gone or extra else {}
     gone = [i for i in gone if i not in unasked]
+    # One asked for only because a job's estimate named it: read when
+    # QuickBooks answered with it, never marked deleted when it didn't.
+    extra = [i for i in extra if i in closed]
     olds = {}
-    for inv_id in list(now_open) + gone:
+    for inv_id in list(now_open) + gone + extra:
         old = have.get(inv_id)
         if old is None:
             snap = col.document(inv_id).get()
@@ -4673,23 +4851,34 @@ def sync_invoices(jobs):
             print("quickbooks invoices: payment methods not read:", err)
     batch, n = db.batch(), 0
     takes = []                          # (job id, invoice, email time): see take_invoice
-    for inv_id in list(now_open) + gone:
+    for inv_id in list(now_open) + gone + extra:
         old = olds[inv_id]
         inv = now_open.get(inv_id) or closed.get(inv_id)
         if inv is None:                                 # deleted in QuickBooks
             batch.set(col.document(inv_id), {"open": False, "deletedAt": _now().isoformat()}, merge=True)
             n += 1
             continue
+        mine = None
         if by_inv.get(inv_id):
             link = (by_inv[inv_id], "job")
         else:
-            nj = by_name.get(_norm_name((inv.get("CustomerRef") or {}).get("name")))
-            link = (nj, "name") if nj else (None, None)
+            mine = _from_estimate(inv, by_est, jobs, env)
+            if mine:
+                link = (mine, "job")
+            elif _snow_invoice(inv, ends):
+                link = (None, None)
+            else:
+                nj = by_name.get(_norm_name((inv.get("CustomerRef") or {}).get("name")))
+                link = (nj, "name") if nj else (None, None)
         rec = _inv_doc(inv, old, *link)
         # Tied to a job by hand on the Invoices list (Jonah, 15 Oct 2026:
-        # a job typed in by hand): the invoice goes on that job too, when the job
-        # holds none, so its work lines are filled from it (fill_imported).
+        # a job typed in by hand), or made from the job's own estimate: the
+        # invoice goes on that job too, when the job holds none, so its work
+        # lines are filled from it (fill_imported) and what is owed shows on it.
+        # A hand pick wins over the estimate (_inv_doc keeps it).
         hand = rec.get("jobId") if rec.get("jobBy") == "hand" else None
+        if not hand and mine and rec.get("jobBy") == "job" and rec.get("jobId") == mine:
+            hand = mine
         if hand and hand in jobs and not (jobs[hand].get("qbInvoiceRef") or {}).get("id") \
                 and not jobs[hand].get("removeWhy"):
             db.collection("jobs").document(hand).set({"qbInvoiceRef": _invoice_record(inv), "lastModified": _stamp()},
