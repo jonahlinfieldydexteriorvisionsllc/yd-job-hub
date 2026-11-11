@@ -1435,10 +1435,34 @@ def _geo(request, path, headers):
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     if request.method == "OPTIONS":
         return ("", 204, headers)
-    if path not in ("/geo/find", "/geo/suggest", "/geo/towns", "/geo/pin", "/geo/link"):
+    if path not in ("/geo/find", "/geo/suggest", "/geo/towns", "/geo/pin", "/geo/link", "/geo/map-draft"):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    # Claude's first draft of a snow property's map from the satellite photo
+    # (snowmap.py): for whoever may change Snow. Nothing is saved here -- the
+    # app shows the draft for fixing, and saving it is the app's own write.
+    if path == "/geo/map-draft":
+        import snowmap
+        d = request.get_json(silent=True) or {}
+        try:
+            uid = _caller(request, "snow", "change")
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        try:
+            day = _check_and_count_usage(uid)
+        except RuntimeError as e:
+            return (json.dumps({"error": str(e)}), 429, json_headers)
+        try:
+            out, usage = snowmap.draft(_claude(), _db, d.get("id"))
+        except ValueError as e:
+            return (json.dumps({"error": str(e)}), 400, json_headers)
+        except Exception as e:                      # noqa: BLE001
+            print("map draft failed:", e)
+            return (json.dumps({"error": "Claude couldn't draft this map just now. Try again, or draw it by hand."}), 502, json_headers)
+        _record_spend(day, "snowmap", usage, snowmap.MODEL)
+        out.pop("box", None)
+        return (json.dumps(out), 200, json_headers)
     # A pin placed by hand for an address no map knows (pins.py): on a snow
     # account for whoever may change Snow, on a job for whoever may change jobs.
     if path == "/geo/pin":

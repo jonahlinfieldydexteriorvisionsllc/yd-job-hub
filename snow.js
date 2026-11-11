@@ -291,7 +291,7 @@
     const stop = id => place[id] || Infinity;
     ids.sort((x, y) => (stop(x) - stop(y)) || 0);
 
-    wrap.innerHTML = (seesPrices ? totalsHtml() : '') + ids.map(id => {
+    wrap.innerHTML = (seesPrices ? totalsHtml() : '') + (window.YDSnowMap ? YDSnowMap.draftAllLine() : '') + ids.map(id => {
       const a = accounts[id];
       const held = Array.isArray(a.vacationHolds) && a.vacationHolds.length;
       // The id lets search (search.js) land on exactly this card.
@@ -315,6 +315,8 @@
           '<span class="snow-go">open in maps</span>' +
         '</a>' +
         (a.areaNotes ? '<div class="snow-notes">' + esc(a.areaNotes) + '</div>' : '') +
+        // The property's bird's-eye map (snowmap.js): draw, open, or check Claude's draft.
+        (window.YDSnowMap ? YDSnowMap.cardLine(id, a) : '') +
         (seesPrices ? '<div class="snow-price">' + esc(priceSummary(id)) + '</div>' : '') +
         (a.driveSqFt ? '<div class="snow-sq">' + a.driveSqFt + ' sq ft drive' +
           (a.walkSqFt ? ' · ' + a.walkSqFt + ' sq ft walks' : '') + '</div>' : '') +

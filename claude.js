@@ -28,7 +28,7 @@
     '/qb/estimate', '/qb/estimate-invoice', '/qb/invoice', '/social/plan-now', '/social/post-now', '/social/google/check', '/social/rewrite',
     '/joblog/now', '/joblog/update', '/inbox/draft', '/estimate/crew', '/followup/thanks', '/qb/invoices-now', '/qb/estimates-now',
     '/qb/invoice-remind', '/qb/invoice-take', '/qb/payments-now', '/qb/change-order', '/docs/email',
-    '/digest/seo-report', '/qb/snow-yes'];
+    '/digest/seo-report', '/qb/snow-yes', '/geo/map-draft'];
   const waitFor = path => (LONG_PATHS.indexOf(path) !== -1 ? LONG_MS : SHORT_MS);
 
   // How many asks are still waiting for their answer. The page never reloads

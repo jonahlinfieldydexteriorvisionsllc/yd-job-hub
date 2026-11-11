@@ -690,6 +690,8 @@
       (addr ? '<div class="stop-addr">' + esc(addr) + '</div>' : '') +
       (dirUrl ? '<a class="stop-dir" href="' + esc(dirUrl) + '" target="_blank" rel="noopener">🧭 Directions</a>' : '') +
       (a.areaNotes ? '<div class="stop-notes">' + esc(a.areaNotes) + '</div>' : '') +
+      // Its bird's-eye map, with what to watch for in words (snowmap.js).
+      (window.YDSnowMap && a.siteMap ? YDSnowMap.cardLine(s.accountId, a) : '') +
       (s.arrivedAt ? '<div class="stop-times">in ' + clockTime(s.arrivedAt) +
         (s.departedAt ? ' · out ' + clockTime(s.departedAt) + ' · <strong>' + mins + ' min</strong>' +
           // What went on the record, so a wrong one can be seen and fixed.
