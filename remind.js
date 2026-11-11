@@ -72,7 +72,14 @@
     // board cards said only "Pickup" -- one tag under two names. One name
     // now, everywhere; the id stays 'pickup', so every entry and card
     // already tagged keeps its tag.
-    { id: 'pickup', icon: '🧱', name: 'Material pickup', timed: false, color: '#8b5a2b', place: 'out' },
+    // And (10 Nov 2026): "all material pickups should be marked as crew
+    // tasks visible by the whole crew and [the crew lead]." So it is the crew's
+    // (`crew`) wherever it is: with nobody on it, every crew member's
+    // (the crew lead is ticked as crew), and with someone on it, theirs while the
+    // rest of the crew still see it. On a calendar it lives on the Crew
+    // schedule (CREW_SCHEDULE_TAGS), and a card carries 👷 Crew (boards.js
+    // crewPickupPatch), so the crew can see and tick every one.
+    { id: 'pickup', icon: '🧱', name: 'Material pickup', timed: false, color: '#8b5a2b', place: 'out', crew: true },
     // And then (22 Oct): "pickups are a thing we do often. So there should
     // be material, rental, parts, check, and equipment (as in our
     // equipment)". Each its own tag, on My work and the Crew schedule,
@@ -144,6 +151,23 @@
   // Every kind of pickup: one with no date is ready now -- on the day's list
   // every day until it is picked up (boards.js pickupsWaiting).
   const PICKUPS = ['pickup', 'rental', 'parts', 'check', 'equipment'];
+  // Tags that are always a crew task (Jonah, 10 Nov 2026: "all material
+  // pickups should be marked as crew tasks visible by the whole crew and
+  // [the crew lead]"): on a calendar, only on the Crew schedule -- the crew only look
+  // at My work, so nobody there could tick one off; the editor moves it
+  // there as the tag is picked, and the owner's device moves any found
+  // elsewhere (calendar.js) -- and on a board, 👷 Crew on the card, so
+  // every crew member can read it from any board that is not private
+  // (boards.js crewPickupPatch). Only the material pickup: the rental,
+  // parts, check and equipment pickups are as they were.
+  const CREW_SCHEDULE_TAGS = ['pickup'];
+  const alwaysCrew = id => CREW_SCHEDULE_TAGS.indexOf(id) !== -1;
+  // Whether an entry of this tag belongs on the Crew schedule rather than
+  // the calendar it is on (the Job schedule has job days only).
+  function toCrewSchedule(type, cal) {
+    const kind = kindOfCal(cal);
+    return alwaysCrew(type) && !!cal && kind !== 'crew' && kind !== 'jobs';
+  }
 
   // ------------------------------------------- where it is done
   //
@@ -293,6 +317,10 @@
       icon: String(t.icon != null ? t.icon : (b ? b.icon : '')).slice(0, 4),
       color: color, ink: b && b.ink && b.color === color ? b.ink : '',
       appointment: typeof t.appointment === 'boolean' ? t.appointment : undefined,
+      // The crew's whatever list it is on (a crew task, a material pickup):
+      // a list the owner edited kept it only on the Crew schedule before,
+      // while functions/reminders.py _tags_of kept it everywhere.
+      crew: !!(b && b.crew),
       timed: b ? b.timed : null,
       place: typeof t.place === 'string' ? (USUAL_PLACES.indexOf(t.place) !== -1 ? t.place : '') : (b && b.place) || '',
       custom: !b,
@@ -701,7 +729,9 @@
   // that card is every crew member's, on their day, count and reminders, and
   // the owner sees it among the crew's, not his own (functions/reminders.py
   // _unclaimed_pickup -- keep the same). Someone on it: theirs alone. A card
-  // he makes there himself is his as ever.
+  // he makes there himself is his as ever. Since 10 Nov 2026 a material
+  // pickup is the crew's by its tag (TYPES `crew`), which says the same for
+  // every one of them, so this is left for a card there given another kind.
   const STORE_CARD_MAKER = 'Job Hub (email)';
   function unclaimedPickup(card, board) {
     if (!card || !board || board.id !== 'pickups' || card.createdBy !== STORE_CARD_MAKER) return false;
@@ -785,6 +815,10 @@
     startIds: kind => startList(kind).map(x => x[0]),
     // Every kind of pickup (22 Oct 2026): one with no date is ready now.
     isPickup: id => PICKUPS.indexOf(id) !== -1,
+    // Always a crew task (10 Nov 2026: the material pickup), and whether an
+    // entry of that tag belongs on the Crew schedule instead of its calendar.
+    alwaysCrew: alwaysCrew,
+    toCrewSchedule: toCrewSchedule,
     // Where it is done (22 Oct 2026): the choices, a thing's place, and a
     // tag's usual one.
     PLACES: PLACES,

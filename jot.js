@@ -277,6 +277,9 @@
   // to a board counts towards it, whatever kind each one was.
   function calPlan(calId, info) {
     const today = localYMD();
+    // A material pickup goes on the Crew schedule wherever it was headed
+    // (Jonah, 10 Nov 2026: every one is a crew task): said and undone there.
+    if (YDCalendar.homeFor) calId = YDCalendar.homeFor(calId, info.title);
     return { how: 'cal', to: 'c:' + calId, calId: calId, title: info.title, notes: info.more,
              date: info.date && info.date > today ? info.date : today, time: info.time, crew: info.crew, info: info };
   }

@@ -2014,6 +2014,9 @@
     calCalChanged();
     calRemindHint();
     calTypeNote();
+    // One left on My work from before (10 Nov 2026): over to the Crew
+    // schedule as it opens, saying why, rather than only on Save.
+    pickupToCrew();
     drawEvDay();
   }
   // The tag buttons for the calendar picked: just each one's name. What it
@@ -2075,6 +2078,7 @@
     drawTagPick();
     calRemindHint();
     calTypeNote();
+    pickupToCrew();
   };
   // Where it is done: three buttons, the one lit kept in #evPlace. Until
   // one is tapped it is the tag's usual place (an email or a call in the
@@ -2177,6 +2181,7 @@
     drawTagPick();
     calRemindHint();
     calTypeNote();
+    pickupToCrew();
   };
   const calName = id => (cals[id] && cals[id].name) || 'that calendar';
   let typeNote = '';
@@ -2187,6 +2192,31 @@
     r.checked = true;
     typeNote = why;
     calCalChanged(false);
+  }
+  // Where an entry of this tag goes when it is put on `calId`: a material
+  // pickup on the Crew schedule, whatever calendar was picked (Jonah,
+  // 10 Nov 2026: "all material pickups should be marked as crew tasks
+  // visible by the whole crew and [the crew lead]" -- the crew only look at My work,
+  // so a pickup there was nobody's to tick; remind.js toCrewSchedule), when
+  // this person may add to it; anything else where it was put.
+  function homeFor(calId, type) {
+    const crew = cals[CREW_CAL];
+    return cals[calId] && YDRemind.toCrewSchedule(type, cals[calId]) && crew && editsCal(crew) ? CREW_CAL : calId;
+  }
+  // In the editor: the tag (tapped, or following the title) says a material
+  // pickup on a calendar other than the Crew schedule -- ticked over to it,
+  // with a word why under the tags. A calendar picked by hand after that
+  // comes back to it the same way, since a save would put it there anyway.
+  function pickupToCrew() {
+    const c = document.querySelector('input[name="evCal"]:checked');
+    const cal = c && cals[c.value], box = el('evType');
+    if (!cal || !box) return;
+    const type = box.value || typeOfEv({ title: val('evTitle') }, cal);
+    if (homeFor(cal.id, type) === cal.id) return;
+    const tag = YDRemind.tagOf(type, cal) || {};
+    moveTo(CREW_CAL, (tag.icon ? tag.icon + ' ' : '') + (tag.name || 'A material pickup') + ' is a crew task: it goes on the ' +
+      calName(CREW_CAL) + ', where the whole crew sees it and can tick it off.');
+    calTypeNote();
   }
   window.calTypeNote = function () {
     const note = el('evTypeNote');
@@ -2321,6 +2351,7 @@
     calTypeNote();
     calRemindHint();
     calWhoChanged();
+    if (byHand === true) pickupToCrew();
   };
 
   // Whether one person can see a calendar, as firestore.rules decide it: the
@@ -2475,7 +2506,9 @@
     // The reminder: the usual one, none, or a set time (and who asked for it).
     const base = ed.eventId ? (events[ed.calId] || {})[ed.eventId] : null;
     Object.assign(rec, YDRemind.fromChoice(val('evRemind'), base, (me() || {}).uid));
-    return { rec: rec, calId: calId, base: base };
+    // A material pickup goes on the Crew schedule, whichever calendar is
+    // ticked (homeFor; the editor has ticked it over already, saying why).
+    return { rec: rec, calId: homeFor(calId, rec.type || typeOfEv({ title: title }, cals[calId])), base: base };
   }
 
   window.calSave = function () {
@@ -3455,10 +3488,57 @@
         if (c.type === 'removed') delete set[c.id];
         else set[c.id] = Object.assign({ id: c.id }, c.data);
       });
-      if (meta && meta.fromCache === false) { fillCrewUids(calId); if (calId === JOBS_CAL) fillJobColors(); }
+      if (meta && meta.fromCache === false) { fillCrewUids(calId); if (calId === JOBS_CAL) fillJobColors(); movePickups(calId); }
       redrawIfVisible();
       announce();
     });
+  }
+
+  // A material pickup on any calendar but the Crew schedule moves there,
+  // every date of it (Jonah, 10 Nov 2026: "all material pickups should be
+  // marked as crew tasks visible by the whole crew and [the crew lead]"): ones from
+  // before, and any an older copy of the app puts on My work. Who is on it,
+  // what was ticked off and everything else go with it. The owner's device
+  // does it, as each calendar's entries come from the server, the way the
+  // calendars were folded together (foldCalendars): copied, read back from
+  // the server, and only then taken off where it was -- so no signal loses
+  // nothing (the copy keeps its id; it is tried again on the next visit).
+  // Only one still to come (a date of it today or later): one that is over
+  // is history, left where it was. A title is read for what it is (as the
+  // calendar shows it, 🧱), so what moved is said, by name, in case a title
+  // read wrong ("pick up the kids" reads as a pickup too) -- Edit moves it back.
+  const pickupsMoved = new Set();
+  const lastDayOf = ev => ev.repeat && ev.repeat !== 'none' ? (ev.repeatUntil || '9999-12-31') : (ev.endDate || ev.date || '');
+  async function movePickups(calId) {
+    const cal = cals[calId];
+    if (!isOwner() || !cal || calId === CREW_CAL || !cals[CREW_CAL] || !window.YDDb) return;
+    const from = today();
+    const list = Object.values(events[calId] || {}).filter(ev => ev && ev.id && homeFor(calId, typeOfEv(ev, cal)) !== calId &&
+      lastDayOf(ev) >= from && !pickupsMoved.has(calId + '/' + ev.id));
+    const moved = [];
+    for (const ev of list) {
+      const key = calId + '/' + ev.id;
+      pickupsMoved.add(key);
+      const rec = Object.assign({}, ev, { updatedAt: nowIso() });
+      delete rec.id;
+      try {
+        // Already there (his other device moved it a moment ago, and the
+        // crew may have ticked it since): only the old copy comes off.
+        const there = await window.YDDb.getFresh('calendars/' + CREW_CAL + '/events', ev.id);
+        if (!there) await window.YDDb.put('calendars/' + CREW_CAL + '/events', ev.id, rec);
+        const back = there || await window.YDDb.getFresh('calendars/' + CREW_CAL + '/events', ev.id);
+        if (!back || back.title !== ev.title) { pickupsMoved.delete(key); continue; }
+        await window.YDDb.remove('calendars/' + calId + '/events', ev.id);
+        moved.push(ev.title || 'Untitled');
+      } catch (e) {
+        pickupsMoved.delete(key);
+        console.warn('[calendar] a material pickup not moved to the Crew schedule yet:', (e && e.code) || e);
+      }
+    }
+    if (moved.length) {
+      showToast('🧱 Material pickups are crew tasks — moved from ' + (cal.name || 'a calendar') + ' to the ' +
+        (cals[CREW_CAL].name || 'Crew schedule') + ': ' + moved.slice(0, 3).join(', ') + (moved.length > 3 ? ' and ' + (moved.length - 3) + ' more' : ''));
+    }
   }
 
   // Home (home.js) shows today from here and redraws when told. Every
@@ -3862,6 +3942,9 @@
   // date, time, crew [{uid, name}], notes }. Its id, or '' when this person
   // may not add to that calendar.
   function addFromNote(calId, rec) {
+    // A material pickup on the Crew schedule, wherever the note was going
+    // (homeFor): jot.js asks homeFor first, so its words and Undo agree.
+    if (rec && rec.title && cals[calId]) calId = homeFor(calId, typeOfEv({ title: rec.title }, cals[calId]));
     const cal = cals[calId];
     if (!cal || !editsCal(cal) || cal.kind === 'jobs' || !rec || !rec.title || !/^\d{4}-\d{2}-\d{2}$/.test(rec.date || '')) return '';
     const t = /^\d{2}:\d{2}$/.test(rec.time || '') ? rec.time : '';
@@ -3882,6 +3965,8 @@
   }
   // Undo of the above: the entry, gone again (only one made that way).
   function dropFromNote(calId, id) {
+    // Made on the Crew schedule instead (a material pickup: addFromNote).
+    if (!(events[calId] || {})[id] && (events[CREW_CAL] || {})[id]) calId = CREW_CAL;
     const ev = (events[calId] || {})[id];
     if (!ev || !ev.fromNote || !editsCal(cals[calId])) return false;
     delete events[calId][id];
@@ -3925,6 +4010,10 @@
     // has none); a calendar, and whether this person may add to it.
     addFromNote: addFromNote,
     dropFromNote: dropFromNote,
+    // The calendar a note with these words really goes on (a material
+    // pickup: the Crew schedule, 10 Nov 2026), so jot.js says it and undoes
+    // it there.
+    homeFor: (calId, title) => cals[calId] ? homeFor(calId, typeOfEv({ title: title || '' }, cals[calId])) : calId,
     people: () => crewPeople(),
     cal: id => cals[id] || null,
     canAddTo: id => !!cals[id] && editsCal(cals[id]) && cals[id].kind !== 'jobs',

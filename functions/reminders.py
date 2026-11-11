@@ -689,8 +689,11 @@ TYPE_LEADS = {"bid": (60, 30)}
 TYPES = {"bid": "📝", "appt": "🕑", "phone": "📲", "pickup": "🧱", "rental": "🔑", "parts": "⚙️", "check": "💵",
          "equipment": "🚜", "delivery": "🚚", "email": "📧", "todo": "✅", "repair": "🔧", "shop": "🏚️",
          "errand": "🧾", "crew": "👷", "jobday": "🔨", "doctor": "💊", "personal": "🙋"}
-# The built-ins that are the crew's wherever they are (remind.js `crew`).
-CREW_TYPES = {"crew", "repair", "shop", "errand"}
+# The built-ins that are the crew's wherever they are (remind.js `crew`). The
+# material pickup too (Jonah, 10 Nov 2026: "all material pickups should be
+# marked as crew tasks visible by the whole crew and [the crew lead]"): with nobody on
+# it, every crew member's, on any calendar or board.
+CREW_TYPES = {"crew", "repair", "shop", "errand", "pickup"}
 # Every kind of pickup (Jonah, 22 Oct 2026: "material, rental, parts, check,
 # and equipment (as in our equipment)"): one with no date is ready now
 # (remind.js PICKUPS).

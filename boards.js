@@ -1014,6 +1014,42 @@
   // hold 'crew'.
   const CREW_LABEL = { id: 'crew', name: '👷 Crew', color: '#c9922f' };
   const isCrewCard = k => (k.labels || []).indexOf(CREW_LABEL.id) !== -1;
+  // A material pickup is always a crew task (Jonah, 10 Nov 2026: "all
+  // material pickups should be marked as crew tasks visible by the whole
+  // crew and [the crew lead]"; remind.js alwaysCrew). Its tag makes it the crew's;
+  // what lets every crew member READ it from a board they are not on is 👷
+  // Crew on the card (firestore.rules), so a card that reads as one -- its
+  // kind picked, a card on Pickups, or a title saying "pick up" -- gets it,
+  // and keeps its kind written down so the label does not make it a plain
+  // crew task. Not on a private board: the crew never see one (it offers no
+  // material pickup). The fields to write, or null when nothing is needed.
+  function crewPickupPatch(board, k) {
+    if (!board || board.virtual || board.crewOnly || board.ownerOnly === true || !k || isCrewCard(k)) return null;
+    const kind = cardType(board, k);
+    if (!YDRemind.alwaysCrew || !YDRemind.alwaysCrew(kind)) return null;
+    const patch = { labels: (k.labels || []).concat([CREW_LABEL.id]) };
+    if (k.type !== kind && YDRemind.typeOf(Object.assign({}, k, patch, { type: null }), { board: board }) !== kind) patch.type = kind;
+    return patch;
+  }
+  // The owner's device puts that right on any open card that lacks it: the
+  // ones from before, and any made where no editor was (a sorted note, an
+  // older copy of the app). Each card once a visit.
+  const crewPickupsDone = new Set();
+  function labelCrewPickups() {
+    if (!isOwner() || !window.YDDb) return;
+    Object.keys(cards).forEach(bid => {
+      const b = boards[bid];
+      if (!b || !cardsLoaded[bid]) return;
+      Object.values(cards[bid] || {}).forEach(k => {
+        if (!k || k.doneAt || crewPickupsDone.has(bid + '/' + k.id)) return;
+        const patch = crewPickupPatch(b, k);
+        if (!patch) return;
+        crewPickupsDone.add(bid + '/' + k.id);
+        Object.assign(k, patch);
+        writeCard(bid, k.id, patch);
+      });
+    });
+  }
   const isRainy = (board, k) => (k.labels || []).some(id => {
     const l = (board.labels || []).find(x => x.id === id);
     return id === RAIN.id || (l && /rain/i.test(l.name || ''));
@@ -1269,6 +1305,8 @@
       if (more.job && more.job.id) Object.assign(rec, { jobId: more.job.id, jobName: more.job.name, jobNum: more.job.num || null });
       if (more.people && more.people.length) rec.assignees = more.people.map(p => ({ uid: p.uid, name: p.name }));
     }
+    // A material pickup: 👷 Crew on it from the start (crewPickupPatch).
+    Object.assign(rec, crewPickupPatch(board, rec) || {});
     cards[boardId] = cards[boardId] || {};
     cards[boardId][id] = Object.assign({ id: id }, rec);
     writeCard(boardId, id, rec);
@@ -2548,7 +2586,10 @@
     // Not on a private board (the crew never see it), nor on one whose cards
     // are not things to go and do (no kinds: To buy, the wish list).
     const crewOk = board.ownerOnly !== true && (crewTask || YDRemind.boardKinds(board).length > 0);
-    const crewBtn = !editsBoard(board) || board.id === CREW_BOARD || !crewOk ? ''
+    // A material pickup is a crew task for good (10 Nov 2026): nothing to
+    // switch, either way.
+    const always = !!(type && YDRemind.alwaysCrew && YDRemind.alwaysCrew(type.id));
+    const crewBtn = !editsBoard(board) || board.id === CREW_BOARD || !crewOk || always ? ''
       : '<button class="btn btn-sm" onclick="cardCrewTask(' + (crewTask ? 'false' : 'true') + ')">' +
           (crewTask ? 'Not a crew task' : '👷 Make it a crew task') + '</button>';
     const inDone = here === doneColOf(board);
@@ -2563,7 +2604,7 @@
         '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-detail-meta">' +
         '<span>📌 ' + esc(board.name) + '</span>' +
-        (type ? '<span>' + type.icon + ' ' + esc(type.name) + '</span>' : '') +
+        (type ? '<span>' + type.icon + ' ' + esc(type.name) + (always ? ' — always a crew task' : '') + '</span>' : '') +
         (place ? '<span>' + place.icon + ' ' + esc(place.name) + '</span>' : '') +
         (k.due ? '<span>📅 ' + dueText(k) + (remind ? ' · ' + esc(remind.replace('Reminder: ', '')) : '') + '</span>' : '') +
         ((k.assignees || []).length ? '<span>👤 ' + k.assignees.map(a => esc(nameOn(a))).join(', ') + '</span>' : '') +
@@ -3196,6 +3237,7 @@
     const kinds = YDRemind.boardKinds(board);
     const kindNow = YDRemind.typeById(k.type) ? k.type : (cardType(board, k) || '');
     const crewKind = kinds.some(t => t.crew);
+    const pickupKind = kinds.some(t => YDRemind.alwaysCrew && YDRemind.alwaysCrew(t.id));
 
     // The boxes come in four groups, each headed with what it is for. Kind,
     // labels, urgency and colour all looked like ways of marking a card and
@@ -3215,7 +3257,8 @@
       (!kinds.length && !crew.length ? '' :
       group(kinds.length ? 'What it is &amp; who is on it' : 'Who is on it',
         (kinds.length ? 'The kind gives the card its colour.' : '') +
-          (crewKind ? ' 👷 A crew task can be seen by every crew member, from any board that is not private.' : ''),
+          (crewKind ? ' 👷 A crew task' + (pickupKind ? ' — every 🧱 material pickup is one —' : '') +
+            ' can be seen by every crew member, from any board that is not private.' : ''),
         // What it is gives the card its colour; whether it has a time is the
         // Time box's alone (Jonah, 15 Oct 2026).
         // Tap buttons, not a drop-down (Jonah, 23 Oct 2026: as the
@@ -3647,6 +3690,10 @@
       if (same('notes')) drop(['notes']);
       if (same('list')) drop(['checklist']);
     }
+    // A material pickup keeps 👷 Crew, whatever was ticked (crewPickupPatch):
+    // read off the card as it will be once saved -- a new title saying
+    // "pick up" makes it one too.
+    Object.assign(rec, crewPickupPatch(board, Object.assign({}, was, rec)) || {});
     cards[board.id] = cards[board.id] || {};
     cards[board.id][id] = Object.assign({ id: id }, was, rec);
     const added = !openCard.cardId;
@@ -4328,6 +4375,7 @@
     cardsNews = setTimeout(() => {
       cardsNews = 0;
       sortWishes();
+      labelCrewPickups();
       document.dispatchEvent(new CustomEvent('yd-cards-changed'));
     }, 50);
   }
