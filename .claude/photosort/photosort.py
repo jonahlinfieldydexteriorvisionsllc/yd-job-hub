@@ -51,8 +51,12 @@ FULL_PX, THUMB_PX = 1600, 360               # jobphotos.js FULL_PX / THUMB_PX
 FULL_Q, THUMB_Q = 82, 70
 PHOTO_EXT = {".heic", ".heif", ".jpg", ".jpeg"}
 VIDEO_EXT = {".mov", ".mp4", ".m4v", ".avi"}
-# Photos looked at in one run at most; the rest wait for the next run.
-SCAN_MAX = 40
+# Photos put in the queue (ones Claude has to look at) by one scan at most.
+# The routine runs once a week (Jonah, 10 Nov 2026), so a busy week's work
+# photos can pass this: it scans again once it has settled these. Videos,
+# screenshots, selfies and photos with no location don't count, they cost
+# nothing to pass over.
+SCAN_MAX = 60
 # Settled photos are remembered by name + when made; this many days of them are
 # kept (older ones can't come back: the first look only reads newer files).
 KEEP_DAYS = 400
@@ -280,8 +284,11 @@ def scan(s, limit=SCAN_MAX):
                 continue
             entries.append((st.st_mtime, e.name, e.path, key))
     entries.sort()                           # oldest first, so a cut-off run resumes in order
-    left = max(0, len(entries) - limit)
-    for _mtime, name, path, key in entries[:limit]:
+    left = 0
+    for n, (_mtime, name, path, key) in enumerate(entries):
+        if len(found) >= limit:
+            left = len(entries) - n          # the rest wait for the next scan
+            break
         kind = what_it_is(name)
         if kind != "photo":
             s["seen"][key] = {"status": kind, "at": now_iso()}
