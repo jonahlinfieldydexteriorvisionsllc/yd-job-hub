@@ -109,8 +109,11 @@ def board_column(j):
 RECEIPT_LEGACY_PLACE = {"overhead": "shop", "subcontractor": "sub", "personal": "personal"}
 # Places that are not a cost of the business (Jonah, 21 Oct 2026: "personal
 # receipts dont get deleted"): a receipt filed only there is kept, but never
-# counted or sent on to QuickBooks.
-RECEIPT_OFF_BOOKS = ("personal",)
+# counted. Paying off the credit card (11 Nov 2026) too: what was bought on
+# the card is counted from each store's receipt, so the payment is counted
+# nowhere -- but unlike Personal it goes on to QuickBooks (RECEIPT_NOT_TO_QB).
+# Keep the same as stages.js.
+RECEIPT_OFF_BOOKS = ("personal", "card")
 # Places QuickBooks must never get: everything off the books. A loan payment
 # was held back too from 22 Oct, on Claude's own reasoning (most of it pays
 # back what was borrowed); Jonah, 10 Nov 2026: "loan payments should still go
@@ -164,8 +167,8 @@ def _filed_places(r):
 
 
 def receipt_off_books(r):
-    """True for a filed receipt whose every place is off the books (only
-    Personal, so far): kept in Job Hub, never counted or sent to QuickBooks."""
+    """True for a filed receipt whose every place is off the books (Personal,
+    Credit card payment): kept in Job Hub, never counted."""
     places = _filed_places(r)
     return bool(places) and all(p in RECEIPT_OFF_BOOKS for p in places)
 

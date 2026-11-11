@@ -81,7 +81,11 @@
   // "personal receipts dont get deleted"): a receipt filed only there is
   // kept, but counted in none of the business's totals and never sent on to
   // QuickBooks (`offBooks` below; stages.py receipt_off_books).
-  const RECEIPT_OFF_BOOKS = ['personal'];
+  // Paying off the credit card too (Jonah, 11 Nov 2026): what was bought on
+  // the card is counted from each store's own receipt, so the payment is
+  // counted nowhere -- but unlike Personal it goes on to QuickBooks
+  // (RECEIPT_NOT_TO_QB). Keep the same as stages.py.
+  const RECEIPT_OFF_BOOKS = ['personal', 'card'];
   // Places QuickBooks must never get (`noQb` below; stages.py
   // receipt_not_to_qb): everything off the books. A loan payment (Jonah,
   // 22 Oct 2026: "add loan payments as a tag for receipts") was held back

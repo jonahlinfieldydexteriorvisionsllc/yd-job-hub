@@ -41,7 +41,7 @@
     ['marketing', '📣 Marketing']];
   const placeName = id => (PLACES.find(p => p[0] === id) || [])[1] || '';
   // Bought for a job, or owed on a loan: never overhead (receipts.py NOT_BY_BILL).
-  const NOT_BY_BILL = ['materials', 'plants', 'rental', 'loan_payment'];
+  const NOT_BY_BILL = ['materials', 'plants', 'rental', 'loan_payment', 'card_payment'];
   const el = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const safe = v => String(v == null ? '' : v).replace(/[^A-Za-z0-9_-]/g, '');

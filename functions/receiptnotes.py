@@ -69,7 +69,7 @@ PLACES = {
     "property": "Property overhead", "llc": "LLC overhead", "equipment": "Equipment",
     "upkeep": "Equipment maintenance", "travel": "Travel", "marketing": "Marketing", "amenity": "Crew amenities",
     "snow": "Snow", "sub": "Subcontractor",
-    "loan": "Loan payment", "personal": "Personal",
+    "loan": "Loan payment", "card": "Credit card payment", "personal": "Personal",
 }
 # The starter tags (receipts.js RECEIPT_TAGS): stored by their id.
 TAGS = {"rebate": "Rebate", "warranty": "Warranty", "return": "To return", "accountant": "For the accountant",
@@ -106,7 +106,8 @@ equipment: oil, filters, grease.
   snow -- rock salt, ice melt and other de-icers for the snow plowing and salting.
   sub -- a subcontractor's bill. Give `sub` (an S number) when they are listed; else "" files it by \
 the store's name.
-  loan -- a loan payment (a truck, a machine).  personal -- his own, not the business's: kept, but \
+  loan -- a loan payment (a truck, a machine).  card -- a payment toward a credit card's balance \
+(paying off the card; what was bought on it has receipts of its own).  personal -- his own, not the business's: kept, but \
 off the books.
 - action "set_aside": counts nowhere; `why` says why in a few words (e.g. "Duplicate of the payment \
 receipt of 23 Oct").

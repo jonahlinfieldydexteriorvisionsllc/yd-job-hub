@@ -64,7 +64,8 @@
     equipment_and_repairs: 'Equipment & repairs', fuel: 'Fuel', tools: 'Tools', rental: 'Rental',
     subcontractor: 'Subcontractor', vehicle: 'Vehicle', office_and_software: 'Office & software',
     insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', loan_payment: 'Loan payment', travel: 'Travel',
-    company: 'Company costs', marketing: 'Marketing', snow: 'Snow (salt, ice melt)', other: 'Other',
+    company: 'Company costs', marketing: 'Marketing', snow: 'Snow (salt, ice melt)', card_payment: 'Credit card payment',
+    other: 'Other',
   };
   // Why a receipt was set aside, in the words of the old pick list. Only read
   // back now: since 13 Oct `skipWhy` is the note typed when it was set aside
@@ -135,6 +136,16 @@
   // bus tickets should be automarked as travel" -- filed under ✈️ Travel by
   // the email reader the same way, even a trip it read as his own.
   //
+  // Jonah, 11 Nov 2026: "credit card payments are receipts and should have
+  // their own tag in job hub". Paying off the business's credit card (the
+  // card company's "We've received your payment" / "Your payment of $X is
+  // scheduled") had been dropped by the email reader as no purchase; now it
+  // is kept and filed under 💳 Credit card payment by itself (receipts.py
+  // CARD_KIND), and sent to QuickBooks like any receipt. Off the books like
+  // Personal (stages.js RECEIPT_OFF_BOOKS): what was bought on the card is
+  // counted from each store's own receipt, so the payment is counted nowhere
+  // again -- only under its own filter.
+  //
   // Every place is one row here -- its chip on a card, its name, its filter
   // under All receipts and its name in a month's totals -- so another place
   // is one more row, and every list below follows.
@@ -155,16 +166,18 @@
     { id: 'snow', chip: '❄️ Snow', name: 'Snow', view: '❄️ Snow', total: 'Snow' },
     { id: 'sub', chip: '🤝 Subcontractor', name: 'Subcontractor', view: '🤝 Subcontractors', total: 'Subcontractors' },
     { id: 'loan', chip: '🏦 Loan payment', name: 'Loan payment', view: '🏦 Loans', total: 'Loan payments' },
+    { id: 'card', chip: '💳 Credit card payment', name: 'Credit card payment', view: '💳 Card payments', total: 'Credit card payments' },
     { id: 'personal', chip: '👤 Personal', name: 'Personal', view: '👤 Personal', total: 'Personal' },
   ];
   // (A phone that picked up this file before the new stages.js, on one bar
-  // of signal, still knows Personal is off the books.)
-  const offBooks = id => (window.YDStages.RECEIPT_OFF_BOOKS || ['personal']).indexOf(id) !== -1;
+  // of signal, still knows Personal and paying the card are off the books.)
+  const offBooks = id => (window.YDStages.RECEIPT_OFF_BOOKS || ['personal', 'card']).indexOf(id) !== -1;
   const DEST = PLACE_LIST.map(p => [p.id, p.chip]).concat([['aside', '🗄 Set aside']]);
   const DEST_NAME = PLACE_LIST.reduce((o, p) => (o[p.id] = p.name, o), { aside: 'Set aside' });
   const DEST_OF_KIND = { fuel: 'vehicle', vehicle: 'vehicle', equipment_and_repairs: 'upkeep',
     office_and_software: 'office', utilities_and_phone: 'office', insurance: 'office', tools: 'shop',
-    loan_payment: 'loan', travel: 'travel', company: 'llc', marketing: 'marketing', snow: 'snow' };
+    loan_payment: 'loan', travel: 'travel', company: 'llc', marketing: 'marketing', snow: 'snow',
+    card_payment: 'card' };
   const destOf = s => s.to || 'job';
   const dest = {};            // receipt id -> where it is going, once picked
   const chosenGear = {};      // receipt id -> vehicle picked
@@ -179,7 +192,8 @@
   // Only for what would otherwise be their bill: materials they sell go by
   // the usual rules.
   const subsBill = r => r.kind === 'subcontractor' ||
-    (r.kind !== 'materials' && r.kind !== 'plants' && r.kind !== 'loan_payment' && !!subMatch(r));
+    (r.kind !== 'materials' && r.kind !== 'plants' && r.kind !== 'loan_payment' && r.kind !== 'card_payment' &&
+      !!subMatch(r));
   const subJobs = r => (subsBill(r) && window.YDSubs && YDSubs.jobsFor ? YDSubs.jobsFor(r) : []);
   const subJob = r => (subsBill(r) && window.YDSubs && YDSubs.jobFor ? YDSubs.jobFor(r) : '');
   // The job a card starts on: the one picked, else the one the reader
@@ -198,6 +212,8 @@
     // or bus tickets should be automarked as travel"; receipts.py is_travel)
     // -- a photo of one sent in from a job included.
     if (r.kind === 'travel') return 'travel';
+    // Paying off the credit card (11 Nov 2026), whoever it was read as for.
+    if (r.kind === 'card_payment') return 'card';
     // A store one of his Monthly bills says where to put. The email reader
     // files those itself (receipts.py _file_place); this is the chip on one
     // that was put back to sort, or marked paid by hand.
@@ -562,7 +578,7 @@
   const LEARN_PLACES = ['amenity', 'shop', 'office', 'property', 'llc', 'equipment', 'upkeep', 'marketing'];
   const LEARN_TWICE = 2;
   // Where the rest of a receipt can go without its lines being divided.
-  const NO_DIVIDING = ['personal', 'travel', 'sub', 'loan', 'aside'];
+  const NO_DIVIDING = ['personal', 'travel', 'sub', 'loan', 'card', 'aside'];
   let learnedLines = {};
   let learnedAt = 0, learnedAsk = null;
   // Read at most every 2 minutes (what another device learned reaches this
@@ -2292,6 +2308,11 @@
         '<div class="rc-hint">Counted under All receipts → 🏦 Loans, by the lender’s name, and sent to QuickBooks like ' +
         'any receipt, home loans included.</div>';
     }
+    if (to === 'card') {
+      return '<div class="rc-assign">' + btn('Add ' + n + 'to credit card payments') + '</div>' +
+        '<div class="rc-hint">Kept under All receipts → 💳 Card payments and sent to QuickBooks like any receipt. ' +
+        'Not added into what the business spent: what was bought on the card has receipts of its own.</div>';
+    }
     if (to === 'sub') {
       // The owner picks which of his subcontractors (the one whose name the
       // store has, to start with); anyone else files it by the store's name.
@@ -2332,11 +2353,12 @@
   // Kept from QuickBooks: filed only where it must not go (Personal:
   // stages.js noQb) -- the server holds those back too (receipts.py
   // _not_for_qb; keep the two the same). A loan payment goes like any
-  // receipt (Jonah, 10 Nov 2026).
+  // receipt (Jonah, 10 Nov 2026), and so does paying off the credit card,
+  // which is off the books but not kept from QuickBooks (stages.js).
   function notForQb(r) {
     const st = stageOf(r);
     // A bill still to pay, or not a receipt at all: never.
-    return !!(st.noQb || st.offBooks || st.id === 'topay' || st.id === 'notreceipt');
+    return !!(st.noQb || st.id === 'topay' || st.id === 'notreceipt');
   }
   function qbHtml(r, rid, compact) {
     const f = r.qbForward || null;
@@ -2355,10 +2377,14 @@
           (sorts() && r.photoPath ? '<button class="btn btn-sm" onclick="rcToQb(\'' + rid + '\')">📤 Send to QuickBooks</button>' : '')) +
     '</div>';
   }
+  // One he forwarded to QuickBooks himself before Job Hub got to it
+  // (`byHand`, receipts.py _sent_by_hand) is not sent a second time.
   function qbEmailHtml(r, rid, f, compact) {
-    if (compact) return f.ok ? '<span class="rc-tag rc-qb-ok" title="Its email was sent to QuickBooks">📤 QB</span>' : '';
+    if (compact) return f.ok ? '<span class="rc-tag rc-qb-ok" title="' + (f.byHand ? 'You forwarded it to QuickBooks yourself'
+      : 'Its email was sent to QuickBooks') + '">📤 QB</span>' : '';
     return '<div class="rc-qb">' +
-      (f.ok ? '<span class="rc-tag rc-qb-ok">📤 Email sent to QuickBooks ' + fmtDateMD(String(f.at || '').slice(0, 10)) + '</span>'
+      (f.ok ? '<span class="rc-tag rc-qb-ok">' + (f.byHand ? '📤 You forwarded it to QuickBooks yourself'
+        : '📤 Email sent to QuickBooks ' + fmtDateMD(String(f.at || '').slice(0, 10))) + '</span>'
         : '<span class="rc-tag rc-owed">Not in QuickBooks yet' + (f.error ? ' — ' + esc(f.error) : '') + '</span>' +
           (sorts() ? '<button class="btn btn-sm" onclick="rcToQb(\'' + rid + '\')">📤 Send to QuickBooks</button>' : '')) +
     '</div>';

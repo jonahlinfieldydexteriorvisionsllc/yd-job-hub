@@ -336,11 +336,44 @@ def _reading_due(st):
 
 KINDS = ["materials", "plants", "dump_and_disposal", "equipment_and_repairs", "fuel", "tools",
          "rental", "subcontractor", "vehicle", "office_and_software", "insurance",
-         "utilities_and_phone", "loan_payment", "travel", "company", "marketing", "snow", "other"]
+         "utilities_and_phone", "loan_payment", "travel", "company", "marketing", "snow", "card_payment", "other"]
 # A payment on a loan (Jonah, 22 Oct 2026): offered for 🏦 Loan payment on the
 # Receipts tab, and sent on to QuickBooks like any receipt (Jonah, 10 Nov
 # 2026: "loan payments should still go to quickbooks").
 LOAN_KIND = "loan_payment"
+# Jonah, 11 Nov 2026: "credit card payments are receipts and should have
+# their own tag in job hub". A payment toward the business's credit card --
+# the card company's "We've received your payment" and "Your payment of $X
+# is scheduled for ..." -- was dropped as no purchase (no goods, a bank's
+# notice; the sender then written off, so the next ones were skipped by code
+# too): not one was in Job Hub, while he forwarded each to QuickBooks by
+# hand. Now kept, and filed by itself under Credit card payment
+# (AUTO_PLACES), sent on to QuickBooks like any receipt. Off the books
+# (stages.RECEIPT_OFF_BOOKS): what was bought on the card is counted from
+# each store's own receipt, so paying the card off is never counted again.
+# The card company's two emails about one payment are one receipt
+# (_card_pair). Known by plain code (card_payment_mail): who sent it and
+# what the subject says -- a payment made or set up, never a statement, a
+# payment due or a declined card -- or by the read calling it one.
+CARD_KIND = "card_payment"
+CARD_ISSUERS = {"capitalone.com", "chase.com", "discover.com", "americanexpress.com", "aexp.com", "citi.com",
+                "citibank.com", "syf.com", "synchronybank.com", "barclaycardus.com", "barclays.com",
+                "wellsfargo.com", "bankofamerica.com", "usbank.com", "elan.com", "elanfinancialservices.com"}
+CARD_PAID = re.compile(r"^\s*((re|fwd?|fw)\s*:\s*)*(we('|’)?ve received your (credit card |card )?payment|"
+                       r"we have received your (credit card |card )?payment|"
+                       r"your (credit card |card )?payment (of \$\s?[\d,]+(\.\d{1,2})? )?(is|has been|was) "
+                       r"(scheduled|received|posted|processed)|"
+                       r"thanks? (you )?for your (credit card |card )?payment|"
+                       r"(credit card|card) payment (received|posted|scheduled|confirmation))", re.I)
+# A payment set up for a day, as against the card company saying it came in:
+# the two emails of one payment (_card_pair).
+CARD_SCHEDULED = re.compile(r"\b(scheduled|will be (made|processed|paid))\b", re.I)
+CARD_AMOUNT = re.compile(r"\bpayment of \$\s?([\d,]+(?:\.\d{1,2})?)", re.I)
+MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+_ON_DAY = r"\W{0,4}(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})"
+CARD_SET_DAY = re.compile(r"\bscheduled for" + _ON_DAY, re.I)
+CARD_POSTED_DAY = re.compile(r"\bposted(?: date| on)?" + _ON_DAY, re.I)
+CARD_SAME_DAYS = 5          # the day a payment was set for and the day it posted, at most
 # Jonah, 29 Oct 2026: "make accountant, bookkeeper and tax-prep bills start on
 # LLC overhead by themselves". What the company itself costs is one kind,
 # `company`, which the Receipts tab starts on 🏢 LLC overhead (receipts.js
@@ -450,6 +483,10 @@ def kind_of(got, lines):
     """What the purchase was: Claude's word for it, unless his rule above
     says otherwise."""
     kind = got.get("kind") if got.get("kind") in KINDS else "other"
+    # Paying off the card (CARD_KIND, _as_card_payment): whatever the card
+    # company is called, and whoever it was read as being for.
+    if kind == CARD_KIND and got.get("doc_type") != "person_payment":
+        return CARD_KIND
     if got.get("doc_type") != "person_payment" and is_office_store(got.get("vendor")):
         return "office_and_software"
     if kind != LOAN_KIND and is_travel(got, lines):
@@ -479,11 +516,14 @@ hardscaping and snow-removal company near Madison, Wisconsin, owned by Jonah Lin
 You are given a numbered list of messages: sender, subject, date, the first words, and \
 attachment names. Keep the ones that are a record of buying or paying for something: a \
 receipt, an invoice or bill from a supplier or service, an order confirmation, a shipped or \
-delivered notice for an order, a payment confirmation, a refund — and money sent from the \
-business's bank to a person (a person-to-person payment, Zelle or similar: these are paychecks).
+delivered notice for an order, a payment confirmation, a refund, a payment toward a credit card \
+(the card company saying a payment to the card was received, posted or scheduled) — and money \
+sent from the business's bank to a person (a person-to-person payment, Zelle or similar: these are \
+paychecks).
 
 Do not keep: marketing and sales offers, newsletters, quotes or estimates for something not \
-yet bought, statements that only list balances, failed or declined payment notices, review \
+yet bought, statements that only list balances, a card's "payment is due" reminder, failed or \
+declined payment notices, review \
 requests, account and security notices, anything that cost nothing (a free order, a $0 payment) \
 -- and anything sent BY YD Exterior Visions to its own customers (its estimates and invoices are \
 sales, not purchases). An invoice or receipt whose first words say 0.00 is owed, due or left to \
@@ -544,7 +584,12 @@ filing or annual report fee. marketing for getting the word out: advertising (Go
 Yelp, Angi, Nextdoor), the website and its domain, yard signs, flyers, door hangers, business \
 cards, truck lettering, and clothing or hats printed or embroidered with the company's name or \
 logo. snow for rock salt, ice melt or another de-icer bought for the snow plowing and salting \
-(never water-softener, pool or kitchen salt).
+(never water-softener, pool or kitchen salt). card_payment for a payment toward a credit card's \
+balance -- the card company saying a payment to the card was received, posted or scheduled \
+("We've received your payment", "Your payment of $500.00 is scheduled for ..."): is_purchase true, \
+paid true, doc_type receipt, vendor the card company, total the payment, date the day the payment is \
+made or posted (not the day the email came), one line naming the card. A card's statement, a \
+"payment is due" reminder or a declined card is no purchase.
 - whose: "personal" for things clearly for a household (groceries, clothes, entertainment, \
 personal care, a service at Jonah's own home) -- but clothing with the company's name or logo on \
 it is "business"; "business" for anything a landscaping company buys or pays for; "unsure" otherwise.
@@ -940,7 +985,63 @@ def read_receipt(client, m, bank="", part=None, note=""):
     if note:
         blocks.append({"type": "text", "text": NOTE_HEAD + note[:NOTE_MAX]})
     got, used, err = _ask(client, read_system(bank), blocks, RECEIPT_SCHEMA, "medium")
-    return _drop_account_no(got, m), used, err
+    return _as_card_payment(_drop_account_no(got, m), m), used, err
+
+
+def card_payment_mail(m):
+    """A card company's email saying a payment to the card was made or set
+    up (CARD_KIND): by its sender and its subject alone."""
+    m = m or {}
+    return sender_key(m.get("from")) in CARD_ISSUERS and bool(CARD_PAID.search(m.get("subject") or ""))
+
+
+def _card_day(m):
+    """The day a card payment was set for, or posted, as the card company's
+    email says it, or '': a "scheduled" email by the day it is set for
+    ("scheduled for Nov. 11, 2026"), a "received" one by its posted date only
+    ("Posted date: July 18, 2026") -- it may also name when the next payment
+    is set for, which is another payment's day."""
+    pat = CARD_SET_DAY if _card_step((m or {}).get("subject")) == "set" else CARD_POSTED_DAY
+    for text in ((m or {}).get("subject") or "", (m or {}).get("text") or ""):
+        hit = pat.search(text)
+        if hit:
+            try:
+                return datetime.date(int(hit.group(3)), MONTHS.index(hit.group(1).lower()[:3]) + 1,
+                                     int(hit.group(2))).isoformat()
+            except ValueError:
+                pass
+    return ""
+
+
+def _as_card_payment(got, m):
+    """A payment toward a credit card (CARD_KIND), whatever the read made of
+    it: one the card company's email shows by its sender and subject
+    (card_payment_mail) is a receipt of money paid, its amount and day taken
+    from the email's own words when they are there; one the read itself
+    called a card payment counts as one only while the read also calls it a
+    purchase (a statement is not)."""
+    if not got:
+        return got
+    # Banks that issue cards also lend (a truck loan, a mortgage), and say
+    # "We've received your payment" for those too: read as a loan payment, it
+    # stays one.
+    by_mail = card_payment_mail(m) and got.get("kind") != LOAN_KIND
+    if by_mail:
+        if not _cents(got.get("total")):
+            hit = CARD_AMOUNT.search((m or {}).get("subject") or "") or CARD_AMOUNT.search((m or {}).get("text") or "")
+            if hit:
+                got["total"] = float(hit.group(1).replace(",", ""))
+        if _cents(got.get("total")) > 0:
+            got["is_purchase"] = True
+        day = _card_day(m)
+        if day:
+            got["date"] = day
+    if (by_mail or got.get("kind") == CARD_KIND) and got.get("is_purchase") \
+            and got.get("doc_type") not in ("person_payment", "refund"):
+        got["kind"] = CARD_KIND
+        got["paid"] = True
+        got["doc_type"] = "receipt"
+    return got
 
 
 def _drop_account_no(got, m):
@@ -1372,7 +1473,7 @@ def _save(db, m, got, jobs, extra=None, to_pay=False):
         for s in db.collection("receipts").where("joinedIds", "array_contains", rid).limit(1).stream():
             ref, snap = s.reference, s
     if not snap.exists:
-        twin = _same_bill(db, fields)
+        twin = _same_bill(db, fields, mail["subject"])
         if twin is None:
             twin = _same_order(db, fields, mail["subject"])
             if twin is not None:
@@ -1709,14 +1810,20 @@ def _file_personal(db, rid, got, m=None):
     # to sort (which loan) and goes on to QuickBooks like any receipt.
     if got.get("kind") == LOAN_KIND:
         return False
+    # Paying off the card is never Personal: it files itself under Credit card
+    # payment (AUTO_PLACES).
+    if got.get("kind") == CARD_KIND:
+        return False
     if _a_subs_bill(db, got, m):
         return False
     ref = db.collection("receipts").document(rid)
     snap = ref.get()
     r = (snap.to_dict() or {}) if snap.exists else {}
-    if stages.receipt_off_books(r):
+    if stages.receipt_not_to_qb(r):
         return True
     if not r or r.get("whose") != "personal" or r.get("splits") or stages.receipt_status(r) != "tosort":
+        return False
+    if r.get("kind") == CARD_KIND:
         return False
     # A flight, a hotel or a ticket is Travel, even a trip Claude read as his
     # own (TRAVEL_STORES): _file_place files it.
@@ -1740,7 +1847,8 @@ def _file_personal(db, rid, got, m=None):
 # by his rule, TRAVEL_STORES), an accountant's, a lawyer's or the state's bill
 # under LLC overhead (never a personal one).
 AUTO_PLACES = {SNOW_KIND: ("snow", "Snow", False), TRAVEL_KIND: ("travel", "Travel", True),
-               COMPANY_KIND: ("llc", "LLC overhead", False)}
+               COMPANY_KIND: ("llc", "LLC overhead", False),
+               CARD_KIND: ("card", "Credit card payment", True)}
 # Jonah, 5 Nov 2026, of his bookkeeper's payment: "not auto sorting". His rules
 # of 29 Oct (bookkeepers on LLC overhead, Anthropic "should auto go to office
 # overhead") only picked the chip a receipt starts on, so each one still waited
@@ -1757,7 +1865,7 @@ BILL_PLACES = {"shop": "Shop overhead", "office": "Office overhead", "property":
                "marketing": "Marketing"}
 # Bought for a job, or owed on a loan: never overhead, even from a store with a
 # bill (a supply-house card, say). The same as monthlybills.js placeFor.
-NOT_BY_BILL = ("materials", "plants", RENTAL_KIND, LOAN_KIND)
+NOT_BY_BILL = ("materials", "plants", RENTAL_KIND, LOAN_KIND, CARD_KIND)
 
 
 def _bill_words(s):
@@ -1864,7 +1972,27 @@ def _told_twice(a, b):
     return first.get("docType") == "invoice"
 
 
-def _same_bill(db, f):
+def _card_step(subject):
+    """'set' for a card payment's "scheduled" email, 'made' for the card
+    company saying it came in."""
+    return "set" if CARD_SCHEDULED.search(subject or "") else "made"
+
+
+def _card_pair(f, subject, r, gap):
+    """Whether a card payment (CARD_KIND) is the one already on receipt `r`:
+    the card company emails once when a payment is set up and once when it
+    comes in. Same card company and amount (_same_bill asks those), days at
+    most CARD_SAME_DAYS apart, and this email the half the receipt is
+    missing -- so two payments of the same amount a day or two apart (two
+    "scheduled", two "received") stay two."""
+    if f.get("kind") != CARD_KIND or r.get("kind") != CARD_KIND or gap > CARD_SAME_DAYS:
+        return False
+    have = {_card_step(x.get("subject")) for x in (r.get("mail") or []) if isinstance(x, dict)}
+    step = _card_step(subject)
+    return bool(have) and step not in have
+
+
+def _same_bill(db, f, subject=""):
     """The receipt this one is the same cost as, or None.
 
     A bill and then the receipt for paying it are one cost, but they rarely
@@ -1900,9 +2028,17 @@ def _same_bill(db, f):
         if vendor_key(r.get("vendor")) != key:
             continue
         try:
-            if abs((datetime.date.fromisoformat(r.get("date") or "") - day).days) > MATCH_DAYS:
-                continue
+            gap = abs((datetime.date.fromisoformat(r.get("date") or "") - day).days)
         except ValueError:
+            continue
+        if gap > MATCH_DAYS:
+            continue
+        # Payments to the card go by their own rule (_card_pair), and are
+        # never the same cost as anything else.
+        if f.get("kind") == CARD_KIND or r.get("kind") == CARD_KIND:
+            if _card_pair(f, subject, r, gap) and (best is None or str(r.get("date") or "") <
+                                                   str((best.to_dict() or {}).get("date") or "")):
+                best = s
             continue
         num, theirs = _norm(f.get("orderNo")), _norm(r.get("orderNo"))
         if num and theirs:
@@ -2309,6 +2445,11 @@ def by_code(m, record):
     """'skip', 'read', or '' (Claude sorts it)."""
     if OWN_SALES.search(m.get("subject") or ""):
         return "skip"
+    # A payment to the card (CARD_KIND): read, never sorted or skipped -- the
+    # card company's sender had been written off by its statements and
+    # "payment is due" reminders.
+    if card_payment_mail(m):
+        return "read"
     r = record or {}
     yes, no = r.get("purchase", 0), r.get("notPurchase", 0)
     if no >= SKIP_AFTER and not yes and not says_money(m):
@@ -2650,10 +2791,107 @@ def _not_for_qb(r):
     return stages.receipt_not_to_qb(r) or not stages.receipt_counts(r)
 
 
-def forward_email(db, rid, to, since_ms, again=False):
+# Jonah forwards some receipts to QuickBooks himself -- every payment to the
+# card, before Job Hub kept those (11 Nov 2026) -- and one sent twice is two
+# expenses waiting in QuickBooks. So before an email goes, his Sent mail to
+# the QuickBooks address is looked through: a forward with the same subject,
+# sent after the email came, whose text gives the email's own day (Gmail's
+# forward says "Date: Wed, Oct 7, 2026 at 1:43 PM"), is that email sent
+# already. Can't tell (Gmail down): sent as before.
+HAND_FWD_DAYS = 45          # how long after an email his own forward of it is looked for
+HAND_FWD_LOOK = 150         # mail to QuickBooks looked at in one go (Job Hub's own sends are among it)
+FORWARD_HEAD = re.compile(r"(-{3,}\s*forwarded message\s*-{3,}|begin forwarded message|-{3,}\s*original message\s*-{3,})",
+                          re.I)
+
+
+def _shape_subject(subject):
+    return re.sub(r"\s+", " ", SHAPE_PREFIX.sub("", subject or "")).strip().lower()
+
+
+def _says_day(text, at_ms):
+    """Whether a person's forward gives the day an email came, in its forward
+    header: "---------- Forwarded message ---------" (Gmail; "Begin forwarded
+    message:" Apple Mail, "Original Message" Outlook) and after it a Date or
+    Sent line naming the day -- "Date: Wed, Oct 7, 2026 at 1:43 PM", "Date:
+    October 7, 2026 at ..." -- the day where the business is, or in UTC. A
+    receipt that prints its own date ("Ordered on November 5, 2026") is no
+    forward header: Job Hub's own forwards carry the receipt's body alone."""
+    head = FORWARD_HEAD.search(text or "")
+    if not head:
+        return False
+    rest = (text or "")[head.end():head.end() + 1500]
+    days = set()
+    for tz in (dg.TZ, datetime.timezone.utc):
+        d = datetime.datetime.fromtimestamp(at_ms / 1000, tz)
+        days.add((d.strftime("%b"), d.strftime("%B"), d.day, d.year))
+    for abbr, full, day, year in days:
+        if re.search(r"\b(date|sent)\s*:\s*(\w+,?\s+)?(%s|%s)\.? %d,? %d\b" % (abbr, full, day, year), rest, re.I):
+            return True
+    return False
+
+
+def _hand_forwards(to, since_ms, cache):
+    """His own mail to the QuickBooks address since `since_ms`, as
+    [(subject shape, sent ms, message id)], read once per go (`cache`)."""
+    if "list" in cache and cache.get("since", 0) <= since_ms:
+        return cache["list"]
+    ids = _list_ids("in:sent to:%s after:%d" % (to, max(0, since_ms // 1000 - 86400)))[:HAND_FWD_LOOK]
+
+    def head(mid):
+        try:
+            msg = _gmail("/messages/" + mid, {"format": "metadata", "metadataHeaders": "Subject"})
+        except NeedsPermission:
+            raise
+        except Exception as e:      # noqa: BLE001 -- one that will not open is not his forward of this
+            print("receipts: sent mail %s not looked at: %s" % (mid, e))
+            return None
+        return (_shape_subject(_header(msg, "Subject")), int(msg.get("internalDate") or 0), mid)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        out = [x for x in pool.map(head, ids) if x]
+    cache.update({"list": out, "since": since_ms})
+    return out
+
+
+def _sent_by_hand(r, to, cache):
+    """The id of one of a receipt's emails Jonah forwarded to QuickBooks
+    himself (above), or ''."""
+    mails = [x for x in (r.get("mail") or []) if isinstance(x, dict) and x.get("id") and x.get("at")]
+    if not mails or not to:
+        return ""
+    first = min(int(x["at"]) for x in mails)
+    if first < int(time.time() * 1000) - HAND_FWD_DAYS * 86400000:
+        return ""
+    try:
+        sent = _hand_forwards(to, first, cache)
+    except NeedsPermission:
+        raise
+    except Exception as e:      # noqa: BLE001 -- can't tell: sent as before
+        print("receipts: could not look for his own forwards:", e)
+        return ""
+    for x in mails:
+        want = _shape_subject(x.get("subject"))
+        for subj, at, mid in sent:
+            if subj != want or at < int(x["at"]):
+                continue
+            seen = cache.setdefault("text", {})
+            if mid not in seen:
+                try:
+                    seen[mid] = _fetch(mid).get("text") or ""
+                except NeedsPermission:
+                    raise
+                except Exception:   # noqa: BLE001
+                    seen[mid] = ""
+            if _says_day(seen[mid], int(x["at"])):
+                return x["id"]
+    return ""
+
+
+def forward_email(db, rid, to, since_ms, again=False, cache=None):
     """Forward one receipt's email to QuickBooks, once. Returns qbForward,
-    or None when there is nothing to send (a photo, sent already, no email
-    from after `since`, or failed too often and not asked `again`)."""
+    or None when there is nothing to send (a photo, sent already -- by Job
+    Hub, or by Jonah himself (_sent_by_hand) -- no email from after `since`,
+    or failed too often and not asked `again`)."""
     ref = db.collection("receipts").document(rid)
     snap = ref.get()
     r = (snap.to_dict() or {}) if snap.exists else {}
@@ -2680,6 +2918,11 @@ def forward_email(db, rid, to, since_ms, again=False):
         # Sent before (the receipt record was made again, say): noted, not sent.
         ref.update({"qbForward": {"ok": True, "at": sent["at"], "to": sent.get("to") or to,
                                   "mid": m["id"], "via": "email"}})
+        return None
+    # Forwarded by Jonah himself already (only when not asked for this one).
+    mine = "" if again else _sent_by_hand(r, to, cache if cache is not None else {})
+    if mine:
+        ref.update({"qbForward": {"ok": True, "at": now, "to": to, "mid": mine, "via": "email", "byHand": True}})
         return None
     try:
         raw = _b64(_gmail("/messages/" + m["id"], {"format": "raw"}).get("raw"))
@@ -2748,11 +2991,12 @@ def forward_emails(db, rids=(), days=None, st=None):
         d = s.to_dict() or {}
         if not d.get("qbForward") and stages.receipt_status(d) != "aside" and not _not_for_qb(d) and s.id not in want:
             want.append(s.id)
+    cache = {}      # his own forwards to QuickBooks, read once for them all (_sent_by_hand)
     for rid in want:
         if out["forwarded"] + out["forwardFailed"] >= FORWARD_MAX:
             out["forwardLeft"] += 1
             continue
-        got = forward_email(db, rid, to, floor)
+        got = forward_email(db, rid, to, floor, cache=cache)
         if got:
             out["forwarded" if got.get("ok") else "forwardFailed"] += 1
     return out
