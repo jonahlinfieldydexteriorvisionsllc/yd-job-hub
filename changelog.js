@@ -174,7 +174,9 @@
   // The areas this person may read (the rules refuse anything wider).
   function readable() {
     if (isOwner()) return null;               // everything
-    return ACCESS.filter(a => can(a, 'see'));
+    // The snow records are price changes: they follow who may see snow
+    // prices (snow.js seesSnowPrices, firestore.rules), not Snow access.
+    return ACCESS.filter(a => a === 'snow' ? (can('snowPrices', 'see') || can('billing', 'see')) : can(a, 'see'));
   }
   function mayOpen() { return !!me() && (isOwner() || readable().length > 0); }
 

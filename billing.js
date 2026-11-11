@@ -31,6 +31,28 @@
   const count = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
   // How much salt a visit's line says went down -- pounds, or (storms before
   // 12 Oct 2026) bags.
+  // One customer's salt on a storm as invoice lines: every visit salted at
+  // the same price put on one line, its quantity the number of times salt
+  // went down (Jonah, 10 Nov 2026: "invoices properly show everything
+  // including number of salt applications"). [{cents each, n, words}], in
+  // pass order; a price that changed between passes is a line of its own.
+  function saltGroups(lines) {
+    const by = {}, order = [];
+    (lines || []).slice().sort((a, b) => (count(a.pass) || 1) - (count(b.pass) || 1)).forEach(l => {
+      const c = count(l.saltCents);
+      if (!(c > 0)) return;
+      if (!by[c]) { by[c] = { cents: c, n: 0, lbs: [] }; order.push(c); }
+      const g = by[c];
+      g.n++;
+      const lb = count(l.saltLbs) > 0 ? count(l.saltLbs).toLocaleString('en-US') + ' lb'
+        : count(l.saltBags) > 0 ? count(l.saltBags) + ' bags' : '';
+      if (lb) g.lbs.push((count(l.pass) > 1 ? 'pass ' + count(l.pass) + ': ' : '') + lb);
+    });
+    return order.map(c => Object.assign(by[c], {
+      words: 'Salt application' + (by[c].n > 1 ? 's (' + by[c].n + ')' : '') +
+        (by[c].lbs.length ? ' — ' + by[c].lbs.join(', ') : ''),
+    }));
+  }
   const saltNote = l => (l.saltLbs != null && count(l.saltLbs) > 0) ? ' — ' + count(l.saltLbs).toLocaleString('en-US') + ' lb'
     : l.saltBags ? ' — ' + l.saltBags + ' bags' : '';
 
@@ -382,7 +404,9 @@
             : esc(l.inches) + '"' + (l.fixedAt ? ' ✏️' : ''))).join(', ') + '</td>' +
           '<td>' + ls.reduce((t, l) => t + l.minutes, 0) + ' min</td>' +
           '<td>' + money(ls.reduce((t, l) => t + l.plowCents, 0)) + '</td>' +
-          '<td>' + (ls.some(l => l.saltCents) ? money(ls.reduce((t, l) => t + l.saltCents, 0)) : '—') + '</td>' +
+          // The salt and how many times it went down.
+          '<td>' + (ls.some(l => l.saltCents) ? money(ls.reduce((t, l) => t + l.saltCents, 0)) +
+            ' <span class="muted">×' + ls.filter(l => count(l.saltCents) > 0).length + '</span>' : '—') + '</td>' +
           '<td>' + (ls.some(l => l.laborCents) ? money(ls.reduce((t, l) => t + l.laborCents, 0)) : '—') + '</td>' +
           '<td class="bold">' + money(total) + '</td></tr>';
       }).join('');
@@ -709,14 +733,10 @@
         const visit = 'Snow removal ' + day + (l.pass > 1 ? ' (pass ' + l.pass + ')' : '') +
                       ' — ' + l.inches + '" cleared';
         // Plowing, salt and labour are separate lines because a customer
-        // querying a bill asks about one of them, not the total.
+        // querying a bill asks about one of them, not the total. Salt is put
+        // together after the visits (saltGroups), counted.
         rows.push([invoiceNo, q(name), date, due, q('Snow Removal'), q(visit),
                    1, (l.plowCents / 100).toFixed(2), (l.plowCents / 100).toFixed(2)].join(','));
-        if (l.saltCents) {
-          rows.push([invoiceNo, q(name), date, due, q('Salt'),
-                     q('Salt application' + saltNote(l)),
-                     1, (l.saltCents / 100).toFixed(2), (l.saltCents / 100).toFixed(2)].join(','));
-        }
         if (l.laborCents) {
           // Quantity is MAN-hours, not elapsed hours. 21 minutes with 2 crew is
           // 0.7 man-hours at $25, not 0.35 hours at $50. Both arrive at the
@@ -744,6 +764,10 @@
                      manHours, rate.toFixed(2),
                      (l.laborCents / 100).toFixed(2)].join(','));
         }
+      });
+      saltGroups(byAccount[aid]).forEach(g => {
+        rows.push([invoiceNo, q(name), date, due, q('Salt'), q(g.words),
+                   g.n, (g.cents / 100).toFixed(2), (g.cents * g.n / 100).toFixed(2)].join(','));
       });
     });
 
@@ -816,6 +840,7 @@
         a.minutes += l.minutes;
         a.crewMinutes += l.minutes * crew;
         a.plow += l.plowCents; a.salt += l.saltCents;
+        if (count(l.saltCents) > 0) a.saltApps = (a.saltApps || 0) + 1;
         a.labor += l.laborCents; a.total += l.totalCents;
         a.bags += count(l.saltBags);
         a.lbs += count(l.saltLbs);
@@ -894,7 +919,7 @@
         '<td>' + Math.round(a.minutes) + ' min</td>' +
         '<td>' + (a.crewMinutes / 60).toFixed(1) + '</td>' +
         '<td>' + money(a.plow) + '</td>' +
-        '<td>' + (a.salt || a.lbs ? (a.salt ? money(a.salt) : '') + (a.lbs ? ' <span class="muted">' + a.lbs.toLocaleString('en-US') + ' lb</span>' : '') +
+        '<td>' + (a.salt || a.lbs ? (a.salt ? money(a.salt) + (a.saltApps ? ' <span class="muted">×' + a.saltApps + '</span>' : '') : '') + (a.lbs ? ' <span class="muted">' + a.lbs.toLocaleString('en-US') + ' lb</span>' : '') +
           (a.bags ? ' <span class="muted">' + a.bags + ' bags</span>' : '') : '—') + '</td>' +
         '<td>' + (a.labor ? money(a.labor) : '—') + '</td>' +
         '<td class="bold">' + money(a.total) + '</td>' +
@@ -932,7 +957,7 @@
       'the best is flagged — worth a look at the rate, not necessarily worth dropping.</div>';
   };
 
-  window.YDBilling = { storms: () => storms, render, seasonByAccount, fixVisit, fixedWords };
+  window.YDBilling = { storms: () => storms, render, seasonByAccount, fixVisit, fixedWords, saltGroups };
 
   // Dropped on sign-out (the page does not reload), so the next person on the
   // same device neither inherits these figures nor misses a fresh watch.

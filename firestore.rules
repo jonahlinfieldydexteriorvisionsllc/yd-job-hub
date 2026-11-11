@@ -271,10 +271,12 @@ service cloud.firestore {
       allow read:  if isStaff();
       allow write: if canChange('snow');
 
-      // Pricing and client contact details. Crew cannot read this at all.
-      // Billing reads it too: a storm cannot be billed without the prices.
+      // Pricing and client contact details. Crew cannot read this at all,
+      // nor an admin with Snow access alone (Jonah, 10 Nov 2026: the crew
+      // see the route, not what each place pays): it takes the Snow prices
+      // switch. Billing reads it too: a storm cannot be billed without it.
       match /private/{docId} {
-        allow read:  if canSee('snow') || canSee('billing');
+        allow read:  if canSee('snowPrices') || canSee('billing');
         allow write: if canChange('snow');
       }
     }
@@ -1257,7 +1259,10 @@ service cloud.firestore {
     // ===================================================================
     match /changeLog/{logId} {
       allow read: if isOwner()
-        || (resource.data.access in ['supplies', 'jobs', 'snow'] && canSee(resource.data.access));
+        || (resource.data.access in ['supplies', 'jobs'] && canSee(resource.data.access))
+        // The snow records are what accounts pay (snow.js logRates): whoever
+        // may see snow prices, as for snowAccounts/{id}/private.
+        || (resource.data.access == 'snow' && (canSee('snowPrices') || canSee('billing')));
       allow create: if isStaff() && logId.matches('cl[a-z0-9]+')
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.keys().hasOnly(['at', 'atMs', 'month', 'uid', 'by', 'area', 'kind', 'access', 'what',

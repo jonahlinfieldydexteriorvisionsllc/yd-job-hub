@@ -2528,7 +2528,10 @@
   // Problems screen.
   const AREAS = [
     { id: 'jobs', label: 'Jobs & bids', hint: 'Job and All Jobs; the Bids and Jobs boards; materials bought' },
-    { id: 'snow', label: 'Snow', hint: 'Snow accounts and their prices; starting and running storms' },
+    { id: 'snow', label: 'Snow', hint: 'Snow accounts and the route; starting and running storms. What each place pays needs Snow prices' },
+    // Jonah (10 Nov 2026): the crew see the route, not what each place pays.
+    { id: 'snowPrices', label: 'Snow prices', hint: 'What each snow account pays, its phone and email, and changing an account. Billing sees them anyway',
+      levels: ['none', 'see'], words: { none: 'Off', see: 'On' } },
     { id: 'billing', label: 'Billing', hint: 'Storm bills, invoices, season reports; sending to QuickBooks. Closing a storm also needs Crew hours & pay: See' },
     { id: 'hours', label: 'Crew hours & pay', hint: 'Everyone’s shifts and pay rates; approving shifts (never their own)' },
     { id: 'calendars', label: 'Calendars', hint: 'Every calendar not marked private — your Personal one they can only look at' },

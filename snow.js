@@ -149,9 +149,13 @@
     // On top of the visit's price, never carved out of it: it is charged
     // only on visits that were salted.
     const perApp = salted ? (saltPerApplication(id) || 0) : 0;
+    // Salt carved out of the visit's price comes off a visit marked as not
+    // salted ("Didn't salt this time"), the same as salt charged each time.
+    // Not known (an older caller passing nothing): billed as before.
+    const unsalted = salted === false ? salt : 0;
 
-    return { plowCents: base - salt, saltCents: salt + perApp, saltAppCents: perApp, laborCents: labor,
-             manHours: manHours, totalCents: base + labor + perApp };
+    return { plowCents: base - salt, saltCents: salt - unsalted + perApp, saltAppCents: perApp, laborCents: labor,
+             manHours: manHours, totalCents: base - unsalted + labor + perApp };
   }
 
   // ---------------------------------------------------------------- render
@@ -174,6 +178,11 @@
       if (second.cents && second.cents !== first.cents) s += ' / ' + cents(second.cents);
     }
     s += p.laborRateCents ? ' + ' + cents(p.laborRateCents) + '/man-hr' : ' · no hourly';
+    // Salt as its own price (Jonah, 10 Nov 2026: "i do want the salt price
+    // visible as a separate price for the client in job hub").
+    const app = saltAppExtra(p);
+    if (app) s += ' · ' + (/paw/i.test(String(app.name || '')) ? 'paw salt ' : 'salt ') + cents(app.cents) + ' each time';
+    else if (pr.salt && pr.salt.included && pr.salt.portionCents) s += ' · ' + cents(pr.salt.portionCents) + ' of it salt';
     return s;
   }
 
@@ -220,7 +229,13 @@
 
   // Customer prices and contact details: Snow, or Billing -- a storm cannot
   // be billed without the prices. The rules allow exactly the same.
-  const seesSnowPrices = () => ydCan('snow', 'see') || ydCan('billing', 'see');
+  // Each account's prices: their own switch (Your Crew → access → Snow
+  // prices), never just Snow access -- an admin who runs the route and the
+  // storms sees the route, not what each place pays (Jonah, 10 Nov 2026:
+  // "make sure the crew cant see the price for each location just the
+  // route"). Billing sees them too: a storm can't be billed without them.
+  // firestore.rules says the same for snowAccounts/{id}/private.
+  const seesSnowPrices = () => ydCan('snowPrices', 'see') || ydCan('billing', 'see');
 
   // An address typed whole into the one box already carries its town after
   // a comma ("12 Main St, Anytown, WI"); adding the town again showed it twice.
@@ -825,6 +840,9 @@
   // copy to be had (no signal, nothing cached) the form is not opened.
   window.editSnowAccount = async function (id) {
     if (!accounts[id]) return;
+    // Saving writes the price boxes, so a form opened without them would
+    // blank the account's prices: changing an account needs its prices.
+    if (!seesSnowPrices()) { showToast('Changing an account needs Snow prices access — ask Jonah'); return; }
     if (!pricing[id]) {
       try {
         const d = await window.YDDb.get('snowAccounts/' + id + '/private', PRICING_DOC);

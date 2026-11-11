@@ -425,11 +425,15 @@
         'aria-pressed="' + (n === v) + '" onclick="stepperPick(\'' + inputId + '\',' + n + ')">' + esc(label) + '</button>').join('') +
     '</div>';
   }
-  function saltChips(stopId, s) {
+  // zeroWords: what the 0 chip says. At a property that gets salt every
+  // visit it is the one way to say this visit didn't (Jonah, 10 Nov 2026:
+  // "everyone with salt gets salt every time ... a button to mark if they
+  // didnt get salt") -- 0 lb is what bills no salt (priceVisit).
+  function saltChips(stopId, s, zeroWords) {
     const inputId = 'st-lbs-' + stopId;
     const cur = drafts[inputId] != null ? drafts[inputId] : (num(s.saltLbs, null) != null ? String(s.saltLbs) : '');
     const same = lastSaltOf(s);
-    return chipRow(inputId, 'Salt used', cur, SALT_CHIPS.map(n => [n, n + ' lb'])
+    return chipRow(inputId, 'Salt used', cur, SALT_CHIPS.map(n => [n, n === 0 && zeroWords ? zeroWords : n + ' lb'])
       .concat(same != null ? [[same, 'Same as last time · ' + same + ' lb']] : []));
   }
   // The depth measured at the last stop left on this storm: usually about
@@ -822,10 +826,12 @@
       return '<div class="salt-warn none">🚫 <b>No salt here.</b> Don’t put any down at this property.</div>' +
         '<button type="button" class="btn btn-sm salt-anyway" onclick="saltAnywayOn(\'' + sid + '\')">They asked for salt today</button>';
     }
-    return (kind === 'paw' ? '<div class="salt-warn paw">🐾 <b>Paw-friendly salt only.</b> Never rock salt here.</div>'
+    const every = kind === 'regular' || kind === 'paw';
+    return (kind === 'paw' ? '<div class="salt-warn paw">🐾 <b>Paw-friendly salt only, every visit.</b> Never rock salt here.</div>'
+      : kind === 'regular' ? '<div class="salt-note">🧂 Salt goes down here every visit.</div>'
       : kind === 'none' ? '<div class="salt-warn none">🚫 This property doesn’t get salt — only if they asked for it today.</div>' : '') +
       stepper(sid, 'lbs', kind === 'paw' ? 'Paw salt used (lbs)' : 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
-      saltChips(sid, s);
+      saltChips(sid, s, every ? '🚫 Didn’t salt this time' : '');
   }
   window.saltAnywayOn = function (id) {
     if (!stops[id]) return;

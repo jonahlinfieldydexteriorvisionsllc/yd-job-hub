@@ -362,7 +362,7 @@
                    ok: 'Raise them' }))) return;
 
     const done = Object.assign({}, already);
-    let made = 0, failed = 0;
+    let made = 0, failed = 0, halted = false;
     for (const accountId of todo) {
       const lines = [];
       byAccount[accountId].sort((x, y) => x.pass - y.pass).forEach(l => {
@@ -371,14 +371,6 @@
           lines.push({ description: 'Snow removal ' + label + pass + ' — ' + l.inches + '" cleared',
                        qty: 1, rate: l.plowCents / 100, amount: l.plowCents / 100,
                        itemId: map.items.plow || '' });
-        }
-        if (l.saltCents) {
-          // Pounds, or bags on a storm from before salt was weighed.
-          const saltNote = l.saltLbs != null && l.saltLbs > 0 ? ' — ' + Number(l.saltLbs).toLocaleString('en-US') + ' lb'
-            : l.saltBags ? ' — ' + l.saltBags + ' bags' : '';
-          lines.push({ description: 'Salt application' + saltNote,
-                       qty: 1, rate: l.saltCents / 100, amount: l.saltCents / 100,
-                       itemId: map.items.salt || '' });
         }
         if (l.laborCents) {
           const hours = l.manHours != null ? l.manHours
@@ -396,6 +388,19 @@
                        qty: hours, rate: rateCents / 100,
                        amount: l.laborCents / 100, itemId: map.items.labor || '' });
         }
+      });
+      // Salt after the visits, put together: quantity = how many times it
+      // went down, each at its price (billing.js saltGroups -- the CSV says
+      // the same). Pounds, or bags on an older storm, in the words.
+      // A half-loaded page without that helper must not raise an invoice with
+      // the salt left off: stopped, said, nothing sent.
+      if (!(window.YDBilling && YDBilling.saltGroups) && byAccount[accountId].some(l => l.saltCents > 0)) {
+        halted = true;
+        break;
+      }
+      (window.YDBilling && YDBilling.saltGroups ? YDBilling.saltGroups(byAccount[accountId]) : []).forEach(g => {
+        lines.push({ description: g.words, qty: g.n, rate: g.cents / 100,
+                     amount: Math.round(g.cents * g.n) / 100, itemId: map.items.salt || '' });
       });
 
       try {
@@ -440,8 +445,11 @@
       const numbers = todo.map(a => done[a] && done[a].number).filter(Boolean);
       showToast(made + ' invoice' + (made === 1 ? '' : 's') + ' raised' +
         (numbers.length ? ' — ' + numbers.join(', ') : '') +
-        (failed ? ', ' + failed + ' failed' : ''));
+        (failed ? ', ' + failed + ' failed' : '') +
+        (halted ? '. The rest weren’t sent: reload the page, then send again' : ''));
       if (window.YDBilling) YDBilling.render();
+    } else if (halted) {
+      showToast('The billing screen hasn’t finished loading — reload the page, then send again');
     } else if (failed) {
       showToast('No invoices were raised');
     }

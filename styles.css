@@ -934,6 +934,7 @@
   .salt-warn.paw  { background:#efe6fa; color:#4b2a78; border:2px solid #6b3fa0; }
   html[data-night] .salt-warn.paw { background:#2c2140; color:#e3d4fb; }
   .salt-anyway { min-height:44px; margin-bottom:6px; }
+  .salt-note { margin:8px 0 6px; font-size:14px; font-weight:600; color:var(--brand-ink); }
   .rt-stop .snow-tag { align-self:flex-start; margin-top:3px; }
   .sf-salt-kinds { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; margin:4px 0 2px; }
   .sf-salt-kind { min-height:44px; border-radius:10px; border:1.5px solid var(--border-strong); background:var(--surface);
