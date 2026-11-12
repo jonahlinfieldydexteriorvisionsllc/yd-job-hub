@@ -301,8 +301,13 @@ def check(db=None, client=None, spent=None, now=None, deadline=None):
         if rec["comment"].strip() and client is not None and drafts < DRAFTS_PER_RUN:
             text = claude_reply(client, rec, spent)
             drafts += 1
-            if text and problem(text):
-                print("reviews: Claude's reply held back --", problem(text))
+            held = problem(text) if text else "no reply came back"
+            if held:
+                # Said on the record and in the answer, so the reason can be
+                # seen without the server's logs.
+                print("reviews: Claude's reply held back --", held)
+                out.setdefault("held", []).append({"id": did, "why": held})
+                ref.set({"claudeHeld": held[:200], "claudeDraft": str(text or "")[:REPLY_MAX]}, merge=True)
                 text = None
             by = "claude" if text else "code"
         if not text:
