@@ -5821,8 +5821,13 @@ function renderDashboard() {
     '<th style="cursor:pointer" onclick="sortDash(\'name\')">Customer' + arrow('name') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'city\')">Where &amp; what' + arrow('city') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'status\')">Status' + arrow('status') + '</th>' +
-    '<th style="cursor:pointer" onclick="sortDash(\'labor\')" title="The estimate’s labor, before tax">Labor' + arrow('labor') + '</th>' +
-    '<th style="cursor:pointer" onclick="sortDash(\'materials\')" title="The estimate’s materials and delivery, before tax">Materials' + arrow('materials') + '</th>' +
+    // Prices, not costs: what the estimate charges the customer, profit in.
+    // Headed plain "Labor", a QuickBooks job's labor lines (about $15,000 on
+    // one, profit in) read as what its labor had cost (Jonah, 12 Nov 2026: "A
+    // lot of those numbers seem wrong"). What the job has really cost is in
+    // Est. Net and on the job's Costs.
+    '<th style="cursor:pointer" onclick="sortDash(\'labor\')" title="What the estimate charges the customer for labor, before tax. Its price, not what the labor costs you">Labor price' + arrow('labor') + '</th>' +
+    '<th style="cursor:pointer" onclick="sortDash(\'materials\')" title="What the estimate charges the customer for materials and delivery, before tax. Its price, not what they cost you">Materials price' + arrow('materials') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'estTotal\')" title="Labor and materials together: the estimate before tax">Estimate' + arrow('estTotal') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'price\')" title="What the job comes to now, change orders in">Price' + arrow('price') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'owed\')" title="Still owed on the QuickBooks invoice">Owed' + arrow('owed') + '</th>' +
@@ -5843,7 +5848,7 @@ function renderDashboard() {
         '<span class="dash-card-price">' + (r.price ? fmtMoney(r.price) : r.push ? esc(r.push) : '<span class="muted">no price yet</span>') + '</span></span>' +
       '<span class="dash-card-status">' + statusHtml(r) + '</span>' +
       ((r.city || r.services) ? '<span class="dash-card-sub">' + esc([r.city, r.services].filter(Boolean).join(' · ')) + '</span>' : '') +
-      (r.estTotal != null ? '<span class="dash-card-nums"><span>Labor ' + moneyCell(r.labor) + '</span><span>Materials ' + moneyCell(r.materials) + '</span>' +
+      (r.estTotal != null ? '<span class="dash-card-nums"><span>Labor price ' + moneyCell(r.labor) + '</span><span>Materials price ' + moneyCell(r.materials) + '</span>' +
         '<span>Estimate ' + moneyCell(r.estTotal) + '</span></span>' : '') +
       '<span class="dash-card-nums"><span>Net ' + netHtml(r) + '</span>' +
         (r.owed != null ? '<span>Owed ' + owedHtml(r) + '</span>' : '') + '</span>' +
