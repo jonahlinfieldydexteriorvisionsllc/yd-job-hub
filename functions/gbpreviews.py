@@ -316,7 +316,8 @@ def check(db=None, client=None, spent=None, now=None, deadline=None):
             if rec["comment"].strip() and client is not None and drafts >= DRAFTS_PER_RUN:
                 continue          # next hour, by Claude
             text = plain_reply(rec["reviewId"], rec["stars"], rec["first"])
-        ref.set({"reply": text, "draftBy": by, "updatedAt": _iso(now)}, merge=True)
+        ref.set({"reply": text, "draftBy": by, "updatedAt": _iso(now),
+                 **({"claudeHeld": None, "claudeDraft": None} if by == "claude" else {})}, merge=True)
         out["drafted"] += 1
         kept[did] = dict(have, reply=text, draftBy=by)
     out["posted"] = _auto(db, cfg, kept, now)
