@@ -397,6 +397,8 @@
       else if (want === 'website' && window.openSiteReport) window.openSiteReport();
       // A neighbor asking for work (neighborasks.js): Media, at the list.
       else if (want === 'asks' && window.openAsks) window.openAsks();
+      // A new Google review (gbpreviews.py): Media, at the reviews.
+      else if (want === 'reviews' && window.openReviews) window.openReviews();
       else if (want === 'paysheet' && window.openPaySheet) window.openPaySheet();
       else if (want === 'invoices' && window.openInvoices) window.openInvoices();
       else if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {

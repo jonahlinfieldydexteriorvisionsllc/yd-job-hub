@@ -6545,3 +6545,10 @@ html[data-bids-page] #panel-boards .section-head { display: none; }
   body.sm-print #smModal .modal-close, body.sm-print #smActions, body.sm-print #smTools { display:none !important; }
   body.sm-print .sm-map { height:640px; }
 }
+
+/* Google reviews to answer (reviews.js), under the neighbors asking for work. */
+.rv-stars { color:#c9922f; letter-spacing:1px; margin-right:4px; }
+.rv-low .rv-stars { color:var(--st-now, #b42318); }
+.rv-auto { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.rv-auto > span { flex:1 1 220px; min-width:0; font-size:13px; color:var(--muted); }
+@media (pointer: coarse), (max-width:1024px) { .rv-auto .btn { min-height:44px; } }

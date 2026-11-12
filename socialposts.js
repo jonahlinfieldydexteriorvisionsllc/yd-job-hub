@@ -147,7 +147,9 @@
     const c = el('mediaTabCount');
     if (!c) return;
     // Neighbors asking for work count too (neighborasks.js).
-    const asked = window.YDAsks ? window.YDAsks.count() : 0;
+    const asked = (window.YDAsks ? window.YDAsks.count() : 0) +
+      // and Google reviews with a reply written, waiting to go up (reviews.js).
+      (window.YDReviews ? window.YDReviews.count() : 0);
     const n = (window.YDPosts ? window.YDPosts.needs().length : 0) + asked;
     const t = n ? String(n) : '';
     if (c.textContent !== t) c.textContent = t;
@@ -237,8 +239,12 @@
     body.dataset.later = '';
     // Neighbors asking for work (neighborasks.js, the post finder): first on
     // the tab whatever else is showing -- a lead waits for nobody.
-    const asks = window.YDAsks ? window.YDAsks.html() : '';
-    const afterAsks = () => { if (window.YDAsks && window.YDAsks.afterDraw) window.YDAsks.afterDraw(); };
+    // Then Google reviews waiting for a reply (reviews.js).
+    const asks = (window.YDAsks ? window.YDAsks.html() : '') + (window.YDReviews ? window.YDReviews.html() : '');
+    const afterAsks = () => {
+      if (window.YDAsks && window.YDAsks.afterDraw) window.YDAsks.afterDraw();
+      if (window.YDReviews && window.YDReviews.afterDraw) window.YDReviews.afterDraw();
+    };
     if (!cfg) { body.innerHTML = asks + '<p class="empty-msg">Loading…</p>'; afterAsks(); return; }
     if (!cfg.on) { body.innerHTML = asks + section('📣 Start posting', '', startHtml()); afterAsks(); return; }
     const views = [
@@ -778,6 +784,8 @@
   document.addEventListener('yd-site-report', () => draw());
   // A neighbor's ask found, answered or skipped: the count, Home, and the list.
   document.addEventListener('yd-asks', changed);
+  // A Google review in, replied to or skipped (reviews.js).
+  document.addEventListener('yd-reviews', changed);
   window.spUpPlace = k => { upPlace = PLACES.indexOf(k) !== -1 ? k : ''; open = null; draw(); };
   window.spReadOld = () => readOld(true);
   window.spDown = (id, on) => {

@@ -744,6 +744,17 @@ def _cards(request, path, headers):
                         _tell_owner(inboxdesk.run(deadline))
                     except Exception as e:          # noqa: BLE001
                         print("inbox desk failed:", e)
+                # Google reviews with no reply yet (gbpreviews.py): a reply
+                # written for each, onto the Media tab, one buzz for new ones.
+                # Claude writes the replies to reviews with words, inside the
+                # same spending limit (client None = plain code writes them).
+                if time.monotonic() < deadline:
+                    try:
+                        import gbpreviews
+                        gbpreviews.check(client=client, deadline=deadline,
+                                         spent=lambda usage: _record_spend(day, "reviews", usage, gbpreviews.MODEL))
+                    except Exception as e:          # noqa: BLE001
+                        print("google reviews failed:", e)
         except Exception as e:                      # noqa: BLE001
             print("followups failed:", e)
     failed, report = None, [{"skipped": "not a card run (switched off, or not one of the card hours)"}]
@@ -1290,6 +1301,42 @@ def _joblog(request, path, headers):
 # one-use state value instead.
 
 
+def _reviews(request, path, headers):
+    """Google reviews (gbpreviews.py): /reviews/reply puts his reply on Google
+    (the owner pressed Post reply); /reviews/check looks at the profile now."""
+    import gbpreviews
+    json_headers = {**headers, "Content-Type": "application/json"}
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path not in ("/reviews/reply", "/reviews/check"):
+        return (json.dumps({"error": "not found"}), 404, json_headers)
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        uid = _caller(request)
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+    body = request.get_json(silent=True) or {}
+    try:
+        if path == "/reviews/reply":
+            result = gbpreviews.post(_db, str(body.get("id") or ""), body.get("reply"), by=uid)
+        else:
+            import spend
+            client = None
+            if not spend.over_cap(_db):
+                try:
+                    client = _claude()
+                except Exception as e:                  # noqa: BLE001
+                    print("reviews: Claude not reachable --", e)
+            day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+            result = gbpreviews.check(_db, client, lambda usage: _record_spend(day, "reviews", usage, gbpreviews.MODEL),
+                                      deadline=time.monotonic() + 100)
+    except Exception as e:                              # noqa: BLE001
+        print("reviews", path, "failed:", e)
+        return (json.dumps({"error": str(e)[:300]}), 500, json_headers)
+    return (json.dumps(result), 400 if result.get("error") and path == "/reviews/reply" else 200, json_headers)
+
+
 def _social(request, path, headers):
     import social
     json_headers = {**headers, "Content-Type": "application/json"}
@@ -1780,6 +1827,8 @@ def claude(request):
         return _joblog(request, path, headers)
     if path.startswith("/inbox"):
         return _inbox(request, path, headers)
+    if path.startswith("/reviews"):
+        return _reviews(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)

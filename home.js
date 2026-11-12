@@ -1215,6 +1215,17 @@
         rows.push(line('⚠️', '<b>The post finder needs you</b>', esc(trouble), '', 'openAsks()'));
       }
     }
+    // Google reviews with a reply written for them (reviews.js): one line,
+    // a tap opens the list on Media.
+    if (isOwner() && window.YDReviews && YDReviews.ready) {
+      const rv = YDReviews.ready();
+      if (rv.length) {
+        any = true;
+        const low = rv.filter(r => (r.stars || 0) <= 3).length;
+        rows.push(line('⭐', '<b>' + rv.length + ' Google review' + (rv.length === 1 ? '' : 's') + ' to answer</b>',
+          esc((low ? low + ' with 3 stars or fewer · ' : '') + 'a reply is written for ' + (rv.length === 1 ? 'it' : 'each')), '', 'openReviews()'));
+      }
+    }
     // A digging job starting within a week with no Diggers ticket yet
     // (digging.js): one tap opens the job.
     if (isOwner() && window.YDDigging && YDDigging.toFile) {
@@ -1629,7 +1640,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-paysheet', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets', 'yd-social', 'yd-bills', 'yd-asks'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-paysheet', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets', 'yd-social', 'yd-bills', 'yd-asks', 'yd-reviews'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 

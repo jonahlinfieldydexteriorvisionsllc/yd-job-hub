@@ -1179,6 +1179,16 @@ service cloud.firestore {
     // by the routine on his PC through the Job Hub page in his own Chrome
     // (signed in as him), read and answered by him alone. Only the words of
     // a find and its answer may change; the server stamps notifiedAt.
+    // Google reviews (gbpreviews.py / reviews.js): the server reads them and
+    // posts replies; the owner may change the written reply or skip one.
+    match /gbpReviews/{id} {
+      allow read: if isOwner();
+      allow update: if isOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reply', 'replyByHand', 'doneAt', 'doneBy', 'updatedAt'])
+        && request.resource.data.status in ['new', 'skipped']
+        && resource.data.status in ['new', 'skipped']
+        && (request.resource.data.reply == null || (request.resource.data.reply is string && request.resource.data.reply.size() <= 1500));
+    }
     match /neighborAsks/{id} {
       allow read, delete: if isOwner();
       allow create: if isOwner() && id.matches('(nd|fb)_[A-Za-z0-9_-]{4,100}')
