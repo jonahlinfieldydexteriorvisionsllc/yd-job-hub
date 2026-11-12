@@ -154,7 +154,9 @@ def claude_reply(client, record, spent=None):
     user = ("Stars: %d of 5\nTheir first name: %s\nTheir review:\n%s" % (stars, first or "(not given)", comment[:COMMENT_MAX]))
     try:
         msg = client.messages.create(
-            model=MODEL, max_tokens=400,
+            # Room for its thinking as well as the few lines of reply: at 400
+            # the thinking used it all and no words came back.
+            model=MODEL, max_tokens=2000, output_config={"effort": "low"},
             system=SYSTEM + voice.block(also="Here it decides how the reply sounds; the rules above still win."),
             messages=[{"role": "user", "content": user}], timeout=60)
     except Exception as err:      # noqa: BLE001 -- plain code writes it instead
